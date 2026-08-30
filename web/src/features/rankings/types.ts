@@ -24,6 +24,24 @@ For commercial licensing, please contact support@quantumnous.com
 
 export type RankingPeriod = 'today' | 'week' | 'month' | 'year'
 
+export type UserRankingModel = {
+  model_name: string
+  total_tokens: number
+  share: number
+  is_other: boolean
+}
+
+export type UserRanking = {
+  rank: number
+  username: string
+  total_tokens: number
+  models: UserRankingModel[]
+}
+
+export type UserRankingsSnapshot = {
+  users: UserRanking[]
+}
+
 export type RankingCategoryId =
   | 'all'
   | 'programming'

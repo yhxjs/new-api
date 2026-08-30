@@ -10,8 +10,9 @@ import (
 )
 
 type headerNavAccess struct {
-	Enabled     bool
-	RequireAuth bool
+	Enabled                bool
+	RequireAuth            bool
+	UserLeaderboardEnabled bool
 }
 
 func getHeaderNavAccess(module string) headerNavAccess {
@@ -61,6 +62,9 @@ func parseHeaderNavAccess(raw any, fallback headerNavAccess) headerNavAccess {
 		if requireAuth, ok := value["requireAuth"]; ok {
 			access.RequireAuth = parseHeaderNavBool(requireAuth, fallback.RequireAuth)
 		}
+		if userLeaderboardEnabled, ok := value["userLeaderboardEnabled"]; ok {
+			access.UserLeaderboardEnabled = parseHeaderNavBool(userLeaderboardEnabled, false)
+		}
 		return access
 	default:
 		return fallback
@@ -108,6 +112,27 @@ func HeaderNavModuleAuth(module string) gin.HandlerFunc {
 			c.JSON(http.StatusForbidden, gin.H{
 				"success": false,
 				"message": fmt.Sprintf("%s is disabled", module),
+			})
+			c.Abort()
+			return
+		}
+
+		if access.RequireAuth {
+			UserAuth()(c)
+			return
+		}
+
+		TryUserAuth()(c)
+	}
+}
+
+func HeaderNavUserRankingsAuth() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		access := getHeaderNavAccess("rankings")
+		if !access.Enabled || !access.UserLeaderboardEnabled {
+			c.JSON(http.StatusForbidden, gin.H{
+				"success": false,
+				"message": "user rankings are disabled",
 			})
 			c.Abort()
 			return

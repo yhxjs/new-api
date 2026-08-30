@@ -21,14 +21,18 @@ export type HeaderNavAccessConfig = {
   requireAuth: boolean
 }
 
+export type HeaderNavRankingsAccessConfig = HeaderNavAccessConfig & {
+  userLeaderboardEnabled: boolean
+}
+
 export type HeaderNavModulesConfig = {
   home: boolean
   console: boolean
   pricing: HeaderNavAccessConfig
-  rankings: HeaderNavAccessConfig
+  rankings: HeaderNavRankingsAccessConfig
   docs: boolean
   about: boolean
-  [key: string]: boolean | HeaderNavAccessConfig
+  [key: string]: boolean | HeaderNavAccessConfig | HeaderNavRankingsAccessConfig
 }
 
 export type SidebarSectionConfig = {
@@ -48,6 +52,7 @@ export const HEADER_NAV_DEFAULT: HeaderNavModulesConfig = {
   rankings: {
     enabled: true,
     requireAuth: false,
+    userLeaderboardEnabled: false,
   },
   docs: true,
   about: true,
@@ -124,6 +129,25 @@ const parseAccessModule = (
   return { ...fallback }
 }
 
+const parseRankingsAccessModule = (
+  raw: unknown,
+  fallback: HeaderNavRankingsAccessConfig
+): HeaderNavRankingsAccessConfig => {
+  const access = parseAccessModule(raw, fallback)
+  const record =
+    raw && typeof raw === 'object'
+      ? (raw as Record<string, unknown>)
+      : undefined
+
+  return {
+    ...access,
+    userLeaderboardEnabled: toBoolean(
+      record?.userLeaderboardEnabled,
+      fallback.userLeaderboardEnabled
+    ),
+  }
+}
+
 const cloneSidebarDefault = (): SidebarModulesAdminConfig =>
   Object.entries(SIDEBAR_MODULES_DEFAULT).reduce<SidebarModulesAdminConfig>(
     (acc, [section, config]) => {
@@ -154,7 +178,7 @@ export function parseHeaderNavModules(
         return
       }
       if (key === 'rankings') {
-        result.rankings = parseAccessModule(raw, base.rankings)
+        result.rankings = parseRankingsAccessModule(raw, base.rankings)
         return
       }
 

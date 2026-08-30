@@ -16,32 +16,25 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useQuery } from '@tanstack/react-query'
+import { useSearch } from '@tanstack/react-router'
 
-import { getRankings, getUserRankings } from '../api'
-import type { RankingPeriod } from '../types'
+import { useAuthStore } from '@/stores/auth-store'
 
-export function useRankings(period: RankingPeriod) {
-  return useQuery({
-    queryKey: ['rankings', period],
-    queryFn: () => getRankings(period),
-    staleTime: 5 * 60 * 1000,
-  })
-}
+import { UserRankingsSection } from './components'
+import { useUserRankings } from './hooks/use-rankings'
+import type { RankingPeriod } from './types'
 
-export function useUserRankings(
-  period: RankingPeriod,
-  enabled: boolean,
-  authenticated: boolean
-) {
-  return useQuery({
-    queryKey: [
-      'user-rankings',
-      period,
-      authenticated ? 'authenticated' : 'anonymous',
-    ],
-    queryFn: () => getUserRankings(period),
-    enabled,
-    staleTime: 5 * 60 * 1000,
-  })
+export function UserRankingsPage() {
+  const search = useSearch({ from: '/rankings' })
+  const authenticated = useAuthStore((state) => state.auth.user !== null)
+  const period: RankingPeriod = search.period ?? 'week'
+  const query = useUserRankings(period, true, authenticated)
+
+  return (
+    <UserRankingsSection
+      users={query.data?.data.users}
+      isLoading={query.isLoading}
+      error={query.error}
+    />
+  )
 }

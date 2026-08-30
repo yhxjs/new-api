@@ -114,6 +114,52 @@ func TestHeaderNavModuleAuthRequiresLoginForRankings(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, recorder.Code)
 }
 
+func TestHeaderNavUserRankingsAuth(t *testing.T) {
+	tests := []struct {
+		name          string
+		raw           string
+		authenticated bool
+		wantStatus    int
+	}{
+		{
+			name:       "default off",
+			raw:        "",
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "explicitly enabled for public rankings",
+			raw:        `{"rankings":{"enabled":true,"requireAuth":false,"userLeaderboardEnabled":true}}`,
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "parent rankings disabled",
+			raw:        `{"rankings":{"enabled":false,"requireAuth":false,"userLeaderboardEnabled":true}}`,
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "inherits login requirement",
+			raw:        `{"rankings":{"enabled":true,"requireAuth":true,"userLeaderboardEnabled":true}}`,
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:          "allows authenticated access when login is required",
+			raw:           `{"rankings":{"enabled":true,"requireAuth":true,"userLeaderboardEnabled":true}}`,
+			authenticated: true,
+			wantStatus:    http.StatusOK,
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			withHeaderNavModules(t, testCase.raw)
+
+			recorder := performHeaderNavRequest(t, HeaderNavUserRankingsAuth(), testCase.authenticated)
+
+			require.Equal(t, testCase.wantStatus, recorder.Code)
+		})
+	}
+}
+
 func TestHeaderNavModuleAuthRejectsLegacyDisabledModule(t *testing.T) {
 	raw := `{"rankings":false}`
 	withHeaderNavModules(t, raw)

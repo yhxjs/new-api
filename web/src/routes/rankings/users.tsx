@@ -16,32 +16,19 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useQuery } from '@tanstack/react-query'
+import { createFileRoute, redirect } from '@tanstack/react-router'
 
-import { getRankings, getUserRankings } from '../api'
-import type { RankingPeriod } from '../types'
+import { UserRankingsPage } from '@/features/rankings/user-rankings-page'
 
-export function useRankings(period: RankingPeriod) {
-  return useQuery({
-    queryKey: ['rankings', period],
-    queryFn: () => getRankings(period),
-    staleTime: 5 * 60 * 1000,
-  })
-}
-
-export function useUserRankings(
-  period: RankingPeriod,
-  enabled: boolean,
-  authenticated: boolean
-) {
-  return useQuery({
-    queryKey: [
-      'user-rankings',
-      period,
-      authenticated ? 'authenticated' : 'anonymous',
-    ],
-    queryFn: () => getUserRankings(period),
-    enabled,
-    staleTime: 5 * 60 * 1000,
-  })
-}
+export const Route = createFileRoute('/rankings/users')({
+  beforeLoad: ({ context, search }) => {
+    if (!context.rankingsAccess.userLeaderboardEnabled) {
+      throw redirect({
+        to: '/rankings',
+        search: { period: search.period },
+        replace: true,
+      })
+    }
+  },
+  component: UserRankingsPage,
+})

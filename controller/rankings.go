@@ -22,3 +22,25 @@ func GetRankings(c *gin.Context) {
 		"data":    result,
 	})
 }
+
+func GetUserRankings(c *gin.Context) {
+	c.Header("Cache-Control", "private, no-store")
+	c.Header("Vary", "Authorization, Cookie")
+
+	result, err := service.GetUserRankingsSnapshot(
+		c.DefaultQuery("period", "week"),
+		c.GetInt("id") > 0,
+	)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    result,
+	})
+}

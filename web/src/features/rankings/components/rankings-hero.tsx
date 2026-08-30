@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 
 import { cn } from '@/lib/utils'
@@ -31,6 +32,8 @@ const PERIODS: { id: RankingPeriod; labelKey: string }[] = [
 
 type RankingsHeroProps = {
   period: RankingPeriod
+  activeView: 'overall' | 'users'
+  userLeaderboardEnabled: boolean
   onPeriodChange: (period: RankingPeriod) => void
 }
 
@@ -52,6 +55,58 @@ export function RankingsHero(props: RankingsHeroProps) {
             'Discover the most-used models and rising vendors on the platform, updated from live usage data.'
           )}
         </p>
+      </div>
+
+      <div
+        role='tablist'
+        aria-label={t('Rankings')}
+        className='border-border/60 flex items-center gap-6 overflow-x-auto border-b'
+      >
+        <Link
+          role='tab'
+          aria-selected={props.activeView === 'overall'}
+          to='/rankings'
+          search={{ period: props.period }}
+          className={cn(
+            'focus-visible:ring-ring/40 relative -mb-px shrink-0 px-1 py-2.5 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none',
+            props.activeView === 'overall'
+              ? 'text-foreground'
+              : 'text-muted-foreground hover:text-foreground'
+          )}
+        >
+          {t('Overall Leaderboard')}
+          <span
+            aria-hidden
+            className={cn(
+              'bg-foreground absolute inset-x-0 -bottom-px h-[2px] rounded-full transition-opacity',
+              props.activeView === 'overall' ? 'opacity-100' : 'opacity-0'
+            )}
+          />
+        </Link>
+
+        {props.userLeaderboardEnabled ? (
+          <Link
+            role='tab'
+            aria-selected={props.activeView === 'users'}
+            to='/rankings/users'
+            search={{ period: props.period }}
+            className={cn(
+              'focus-visible:ring-ring/40 relative -mb-px shrink-0 px-1 py-2.5 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none',
+              props.activeView === 'users'
+                ? 'text-foreground'
+                : 'text-muted-foreground hover:text-foreground'
+            )}
+          >
+            {t('User Leaderboard')}
+            <span
+              aria-hidden
+              className={cn(
+                'bg-foreground absolute inset-x-0 -bottom-px h-[2px] rounded-full transition-opacity',
+                props.activeView === 'users' ? 'opacity-100' : 'opacity-0'
+              )}
+            />
+          </Link>
+        ) : null}
       </div>
 
       {/* Underline tabs for period — clean and unobtrusive. */}

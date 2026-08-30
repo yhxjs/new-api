@@ -20,23 +20,31 @@ import { getStatus } from '@/lib/api'
 
 export type ModuleAccess = { enabled: boolean; requireAuth: boolean }
 
+export type RankingsAccess = ModuleAccess & {
+  userLeaderboardEnabled: boolean
+}
+
 export type HeaderNavModule = 'rankings' | 'pricing'
 
 export type HeaderNavModules = {
   home: boolean
   console: boolean
   pricing: ModuleAccess
-  rankings: ModuleAccess
+  rankings: RankingsAccess
   docs: boolean
   about: boolean
-  [key: string]: boolean | ModuleAccess
+  [key: string]: boolean | ModuleAccess | RankingsAccess
 }
 
 const DEFAULT_HEADER_NAV_MODULES: HeaderNavModules = {
   home: true,
   console: true,
   pricing: { enabled: true, requireAuth: false },
-  rankings: { enabled: true, requireAuth: false },
+  rankings: {
+    enabled: true,
+    requireAuth: false,
+    userLeaderboardEnabled: false,
+  },
   docs: true,
   about: true,
 }
@@ -93,6 +101,25 @@ function parseAccess(raw: unknown, fallback: ModuleAccess): ModuleAccess {
   return { ...fallback }
 }
 
+function parseRankingsAccess(
+  raw: unknown,
+  fallback: RankingsAccess
+): RankingsAccess {
+  const access = parseAccess(raw, fallback)
+  const record =
+    raw && typeof raw === 'object'
+      ? (raw as Record<string, unknown>)
+      : undefined
+
+  return {
+    ...access,
+    userLeaderboardEnabled: parseHeaderNavBoolean(
+      record?.userLeaderboardEnabled,
+      fallback.userLeaderboardEnabled
+    ),
+  }
+}
+
 function parseHeaderNavRecord(raw: unknown): Record<string, unknown> | null {
   if (!raw || String(raw).trim() === '') return null
   if (raw && typeof raw === 'object') return raw as Record<string, unknown>
@@ -115,7 +142,7 @@ export function parseHeaderNavModules(raw: unknown): HeaderNavModules {
       return
     }
     if (key === 'rankings') {
-      result.rankings = parseAccess(value, result.rankings)
+      result.rankings = parseRankingsAccess(value, result.rankings)
       return
     }
 
@@ -140,6 +167,12 @@ export function parseHeaderNavModulesFromStatus(
   status: Record<string, unknown> | null
 ): HeaderNavModules {
   return parseHeaderNavModules(status?.HeaderNavModules)
+}
+
+export function isUserLeaderboardEnabledFromStatus(
+  status: Record<string, unknown> | null
+): boolean {
+  return parseHeaderNavModulesFromStatus(status).rankings.userLeaderboardEnabled
 }
 
 function getCachedStatus(): Record<string, unknown> | null {
@@ -173,14 +206,26 @@ export function getModuleAccess(module: HeaderNavModule): ModuleAccess {
   return getModuleAccessFromStatus(getCachedStatus(), module)
 }
 
+export function getFreshModuleAccess(
+  module: 'rankings'
+): Promise<RankingsAccess>
+export function getFreshModuleAccess(module: 'pricing'): Promise<ModuleAccess>
 export async function getFreshModuleAccess(
   module: HeaderNavModule
-): Promise<ModuleAccess> {
+): Promise<ModuleAccess | RankingsAccess> {
   try {
     const status = (await getStatus()) as Record<string, unknown> | null
     cacheStatus(status)
-    return getModuleAccessFromStatus(status, module)
+    const modules = parseHeaderNavModulesFromStatus(status)
+    return module === 'rankings' ? modules.rankings : modules.pricing
   } catch {
+    if (module === 'rankings') {
+      return {
+        enabled: false,
+        requireAuth: true,
+        userLeaderboardEnabled: false,
+      }
+    }
     return { enabled: false, requireAuth: true }
   }
 }

@@ -55,6 +55,7 @@ const headerNavSchema = z.object({
   pricingRequireAuth: z.boolean(),
   rankingsEnabled: z.boolean(),
   rankingsRequireAuth: z.boolean(),
+  userLeaderboardEnabled: z.boolean(),
   docs: z.boolean(),
   about: z.boolean(),
 })
@@ -89,6 +90,10 @@ const toFormValues = (config: HeaderNavModulesConfig): HeaderNavFormValues => ({
     config.rankings?.requireAuth === undefined
       ? HEADER_NAV_DEFAULT.rankings.requireAuth
       : Boolean(config.rankings.requireAuth),
+  userLeaderboardEnabled:
+    config.rankings?.userLeaderboardEnabled === undefined
+      ? HEADER_NAV_DEFAULT.rankings.userLeaderboardEnabled
+      : Boolean(config.rankings.userLeaderboardEnabled),
   docs:
     config.docs === undefined ? HEADER_NAV_DEFAULT.docs : Boolean(config.docs),
   about:
@@ -130,6 +135,7 @@ export function HeaderNavigationSection({
         ...(config.rankings ?? HEADER_NAV_DEFAULT.rankings),
         enabled: values.rankingsEnabled,
         requireAuth: values.rankingsRequireAuth,
+        userLeaderboardEnabled: values.userLeaderboardEnabled,
       },
     }
 
@@ -267,11 +273,11 @@ export function HeaderNavigationSection({
                   )}
                 />
 
-                <FormField
-                  control={form.control}
-                  name={module.requireAuthKey}
-                  render={({ field }) => (
-                    <SettingsControlChildren>
+                <SettingsControlChildren className='space-y-1'>
+                  <FormField
+                    control={form.control}
+                    name={module.requireAuthKey}
+                    render={({ field }) => (
                       <SettingsSwitchItem className='py-2'>
                         <SettingsSwitchContent>
                           <FormLabel>{module.requireAuthTitle}</FormLabel>
@@ -288,9 +294,38 @@ export function HeaderNavigationSection({
                         </FormControl>
                         <FormMessage />
                       </SettingsSwitchItem>
-                    </SettingsControlChildren>
-                  )}
-                />
+                    )}
+                  />
+
+                  {module.enabledKey === 'rankingsEnabled' ? (
+                    <FormField
+                      control={form.control}
+                      name='userLeaderboardEnabled'
+                      render={({ field }) => (
+                        <SettingsSwitchItem className='py-2'>
+                          <SettingsSwitchContent>
+                            <FormLabel>
+                              {t('Enable user leaderboard')}
+                            </FormLabel>
+                            <FormDescription>
+                              {t(
+                                'Show users ranked by token usage and model distribution.'
+                              )}
+                            </FormDescription>
+                          </SettingsSwitchContent>
+                          <FormControl>
+                            <Switch
+                              checked={field.value}
+                              onCheckedChange={field.onChange}
+                              disabled={!form.watch('rankingsEnabled')}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </SettingsSwitchItem>
+                      )}
+                    />
+                  ) : null}
+                </SettingsControlChildren>
               </SettingsControlGroup>
             ))}
           </div>
