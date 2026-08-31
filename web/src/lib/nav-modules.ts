@@ -24,13 +24,14 @@ export type RankingsAccess = ModuleAccess & {
   userLeaderboardEnabled: boolean
 }
 
-export type HeaderNavModule = 'rankings' | 'pricing'
+export type HeaderNavModule = 'rankings' | 'pricing' | 'modelStatus'
 
 export type HeaderNavModules = {
   home: boolean
   console: boolean
   pricing: ModuleAccess
   rankings: RankingsAccess
+  modelStatus: ModuleAccess
   docs: boolean
   about: boolean
   [key: string]: boolean | ModuleAccess | RankingsAccess
@@ -45,6 +46,7 @@ const DEFAULT_HEADER_NAV_MODULES: HeaderNavModules = {
     requireAuth: false,
     userLeaderboardEnabled: false,
   },
+  modelStatus: { enabled: false, requireAuth: true },
   docs: true,
   about: true,
 }
@@ -52,6 +54,7 @@ const DEFAULT_HEADER_NAV_MODULES: HeaderNavModules = {
 const DEFAULTS: Record<HeaderNavModule, ModuleAccess> = {
   pricing: DEFAULT_HEADER_NAV_MODULES.pricing,
   rankings: DEFAULT_HEADER_NAV_MODULES.rankings,
+  modelStatus: DEFAULT_HEADER_NAV_MODULES.modelStatus,
 }
 
 function cloneHeaderNavDefaults(): HeaderNavModules {
@@ -59,6 +62,7 @@ function cloneHeaderNavDefaults(): HeaderNavModules {
     ...DEFAULT_HEADER_NAV_MODULES,
     pricing: { ...DEFAULT_HEADER_NAV_MODULES.pricing },
     rankings: { ...DEFAULT_HEADER_NAV_MODULES.rankings },
+    modelStatus: { ...DEFAULT_HEADER_NAV_MODULES.modelStatus },
   }
 }
 
@@ -145,6 +149,13 @@ export function parseHeaderNavModules(raw: unknown): HeaderNavModules {
       result.rankings = parseRankingsAccess(value, result.rankings)
       return
     }
+    if (key === 'modelStatus') {
+      result.modelStatus = {
+        ...parseAccess(value, result.modelStatus),
+        requireAuth: true,
+      }
+      return
+    }
 
     const fallback = result[key]
     if (
@@ -209,7 +220,9 @@ export function getModuleAccess(module: HeaderNavModule): ModuleAccess {
 export function getFreshModuleAccess(
   module: 'rankings'
 ): Promise<RankingsAccess>
-export function getFreshModuleAccess(module: 'pricing'): Promise<ModuleAccess>
+export function getFreshModuleAccess(
+  module: 'pricing' | 'modelStatus'
+): Promise<ModuleAccess>
 export async function getFreshModuleAccess(
   module: HeaderNavModule
 ): Promise<ModuleAccess | RankingsAccess> {
@@ -217,7 +230,8 @@ export async function getFreshModuleAccess(
     const status = (await getStatus()) as Record<string, unknown> | null
     cacheStatus(status)
     const modules = parseHeaderNavModulesFromStatus(status)
-    return module === 'rankings' ? modules.rankings : modules.pricing
+    if (module === 'rankings') return modules.rankings
+    return modules[module]
   } catch {
     if (module === 'rankings') {
       return {

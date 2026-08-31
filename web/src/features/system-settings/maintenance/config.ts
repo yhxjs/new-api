@@ -30,6 +30,7 @@ export type HeaderNavModulesConfig = {
   console: boolean
   pricing: HeaderNavAccessConfig
   rankings: HeaderNavRankingsAccessConfig
+  modelStatus: HeaderNavAccessConfig
   docs: boolean
   about: boolean
   [key: string]: boolean | HeaderNavAccessConfig | HeaderNavRankingsAccessConfig
@@ -53,6 +54,10 @@ export const HEADER_NAV_DEFAULT: HeaderNavModulesConfig = {
     enabled: true,
     requireAuth: false,
     userLeaderboardEnabled: false,
+  },
+  modelStatus: {
+    enabled: false,
+    requireAuth: true,
   },
   docs: true,
   about: true,
@@ -103,6 +108,7 @@ const cloneHeaderNavDefault = (): HeaderNavModulesConfig => ({
   ...HEADER_NAV_DEFAULT,
   pricing: { ...HEADER_NAV_DEFAULT.pricing },
   rankings: { ...HEADER_NAV_DEFAULT.rankings },
+  modelStatus: { ...HEADER_NAV_DEFAULT.modelStatus },
 })
 
 const parseAccessModule = (
@@ -170,6 +176,7 @@ export function parseHeaderNavModules(
       ...base,
       pricing: { ...base.pricing },
       rankings: { ...base.rankings },
+      modelStatus: { ...base.modelStatus },
     }
 
     Object.entries(parsed).forEach(([key, raw]) => {
@@ -179,6 +186,13 @@ export function parseHeaderNavModules(
       }
       if (key === 'rankings') {
         result.rankings = parseRankingsAccessModule(raw, base.rankings)
+        return
+      }
+      if (key === 'modelStatus') {
+        result.modelStatus = {
+          ...parseAccessModule(raw, base.modelStatus),
+          requireAuth: true,
+        }
         return
       }
 
@@ -201,7 +215,13 @@ export function parseHeaderNavModules(
 export function serializeHeaderNavModules(
   config: HeaderNavModulesConfig
 ): string {
-  return JSON.stringify(config)
+  return JSON.stringify({
+    ...config,
+    modelStatus: {
+      ...config.modelStatus,
+      requireAuth: true,
+    },
+  })
 }
 
 export function parseSidebarModulesAdmin(

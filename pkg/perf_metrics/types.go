@@ -60,6 +60,43 @@ type SummaryAllResult struct {
 	Models []ModelSummary `json:"models"`
 }
 
+type StatusBucket struct {
+	Ts           int64   `json:"ts"`
+	HasData      bool    `json:"has_data"`
+	RequestCount int64   `json:"request_count"`
+	SuccessRate  float64 `json:"success_rate"`
+}
+
+type StatusModel struct {
+	ModelName    string         `json:"model_name"`
+	RequestCount int64          `json:"request_count"`
+	SuccessCount int64          `json:"success_count"`
+	FailureCount int64          `json:"failure_count"`
+	SuccessRate  float64        `json:"success_rate"`
+	AvgTtftMs    *int64         `json:"avg_ttft_ms"`
+	AvgTps       *float64       `json:"avg_tps"`
+	Buckets      []StatusBucket `json:"buckets"`
+}
+
+type StatusSummary struct {
+	ModelCount     int     `json:"model_count"`
+	RequestCount   int64   `json:"request_count"`
+	SuccessCount   int64   `json:"success_count"`
+	SuccessRate    float64 `json:"success_rate"`
+	AttentionCount int     `json:"attention_count"`
+	CriticalCount  int     `json:"critical_count"`
+}
+
+type StatusResult struct {
+	UpdatedAt         int64         `json:"updated_at"`
+	WindowHours       int           `json:"window_hours"`
+	CollectionEnabled bool          `json:"collection_enabled"`
+	SelectedGroup     string        `json:"selected_group"`
+	Groups            []string      `json:"groups"`
+	Summary           StatusSummary `json:"summary"`
+	Models            []StatusModel `json:"models"`
+}
+
 type bucketKey struct {
 	model    string
 	group    string

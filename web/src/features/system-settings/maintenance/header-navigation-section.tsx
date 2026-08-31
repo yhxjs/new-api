@@ -56,6 +56,7 @@ const headerNavSchema = z.object({
   rankingsEnabled: z.boolean(),
   rankingsRequireAuth: z.boolean(),
   userLeaderboardEnabled: z.boolean(),
+  modelStatusEnabled: z.boolean(),
   docs: z.boolean(),
   about: z.boolean(),
 })
@@ -94,6 +95,10 @@ const toFormValues = (config: HeaderNavModulesConfig): HeaderNavFormValues => ({
     config.rankings?.userLeaderboardEnabled === undefined
       ? HEADER_NAV_DEFAULT.rankings.userLeaderboardEnabled
       : Boolean(config.rankings.userLeaderboardEnabled),
+  modelStatusEnabled:
+    config.modelStatus?.enabled === undefined
+      ? HEADER_NAV_DEFAULT.modelStatus.enabled
+      : Boolean(config.modelStatus.enabled),
   docs:
     config.docs === undefined ? HEADER_NAV_DEFAULT.docs : Boolean(config.docs),
   about:
@@ -136,6 +141,11 @@ export function HeaderNavigationSection({
         enabled: values.rankingsEnabled,
         requireAuth: values.rankingsRequireAuth,
         userLeaderboardEnabled: values.userLeaderboardEnabled,
+      },
+      modelStatus: {
+        ...(config.modelStatus ?? HEADER_NAV_DEFAULT.modelStatus),
+        enabled: values.modelStatusEnabled,
+        requireAuth: true,
       },
     }
 
@@ -328,6 +338,30 @@ export function HeaderNavigationSection({
                 </SettingsControlChildren>
               </SettingsControlGroup>
             ))}
+
+            <FormField
+              control={form.control}
+              name='modelStatusEnabled'
+              render={({ field }) => (
+                <SettingsSwitchItem>
+                  <SettingsSwitchContent>
+                    <FormLabel>{t('Model Status')}</FormLabel>
+                    <FormDescription>
+                      {t(
+                        'Show recent model availability and performance to signed-in users.'
+                      )}
+                    </FormDescription>
+                  </SettingsSwitchContent>
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </SettingsSwitchItem>
+              )}
+            />
           </div>
         </SettingsForm>
       </Form>

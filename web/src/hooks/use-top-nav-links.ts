@@ -39,6 +39,7 @@ export type TopNavLink = {
  *   console: true,
  *   pricing: { enabled: true, requireAuth: false },
  *   rankings: { enabled: true, requireAuth: false },
+ *   modelStatus: { enabled: false, requireAuth: true },
  *   docs: true,
  *   about: true
  * }
@@ -84,6 +85,10 @@ export function useTopNavLinks(): TopNavLink[] {
   if (rankings && typeof rankings === 'object' && rankings.enabled) {
     const requiresAuth = rankings.requireAuth && !isAuthed
     links.push({ title: t('Rankings'), href: '/rankings', requiresAuth })
+  }
+
+  if (modules.modelStatus.enabled && isAuthed) {
+    links.push({ title: t('Model Status'), href: '/model-status' })
   }
 
   // Docs (supports external links)

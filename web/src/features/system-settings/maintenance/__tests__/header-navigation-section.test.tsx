@@ -29,7 +29,28 @@ describe('header navigation settings', () => {
     i18next.addResourceBundle('en', 'translation', {
       Rankings: 'Rankings',
       'Enable user leaderboard': 'Enable user leaderboard',
+      'Model Status': 'Model Status',
     })
+  })
+
+  test('shows an independent model status switch', () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { mutations: { retry: false } },
+    })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <HeaderNavigationSection
+          config={HEADER_NAV_DEFAULT}
+          initialSerialized=''
+        />
+      </QueryClientProvider>
+    )
+
+    expect(
+      screen.getByRole('switch', { name: 'Model Status' })
+    ).toBeInTheDocument()
+    queryClient.clear()
   })
 
   test('disables the user leaderboard switch only while rankings are off', () => {

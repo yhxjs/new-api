@@ -145,6 +145,8 @@ func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
 			requestCount:   row.RequestCount,
 			successCount:   row.SuccessCount,
 			totalLatencyMs: row.TotalLatencyMs,
+			ttftSumMs:      row.TtftSumMs,
+			ttftCount:      row.TtftCount,
 			outputTokens:   row.OutputTokens,
 			generationMs:   row.GenerationMs,
 		}
@@ -196,6 +198,158 @@ func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
 	})
 
 	return SummaryAllResult{Models: models}, nil
+}
+
+func QueryStatus(hours int, groups []string) (StatusResult, error) {
+	if hours <= 0 {
+		hours = 24
+	}
+	if hours > 24*30 {
+		hours = 24 * 30
+	}
+
+	now := time.Now()
+	endTs := now.Unix()
+	startTs := now.UTC().Truncate(time.Hour).Add(-time.Duration(hours-1) * time.Hour).Unix()
+	allowedGroups := allowedGroupSet(groups)
+	merged := map[bucketKey]counters{}
+
+	rows, err := model.GetPerfMetricsSummaryBucketsAll(startTs, endTs, groups)
+	if err != nil {
+		return StatusResult{}, err
+	}
+	for _, row := range rows {
+		mergeCounters(merged, bucketKey{
+			model:    row.ModelName,
+			bucketTs: row.BucketTs,
+		}, counters{
+			requestCount:   row.RequestCount,
+			successCount:   row.SuccessCount,
+			totalLatencyMs: row.TotalLatencyMs,
+			ttftSumMs:      row.TtftSumMs,
+			ttftCount:      row.TtftCount,
+			outputTokens:   row.OutputTokens,
+			generationMs:   row.GenerationMs,
+		})
+	}
+
+	hotBuckets.Range(func(key, value any) bool {
+		bucket := key.(bucketKey)
+		if bucket.bucketTs < startTs || bucket.bucketTs > endTs {
+			return true
+		}
+		if allowedGroups != nil {
+			if _, ok := allowedGroups[bucket.group]; !ok {
+				return true
+			}
+		}
+		mergeCounters(merged, bucket, value.(*atomicBucket).snapshot())
+		return true
+	})
+
+	return buildStatusResult(now, hours, merged), nil
+}
+
+func buildStatusResult(now time.Time, hours int, merged map[bucketKey]counters) StatusResult {
+	if hours <= 0 {
+		hours = 24
+	}
+
+	endHour := now.UTC().Truncate(time.Hour)
+	startHour := endHour.Add(-time.Duration(hours-1) * time.Hour)
+	startTs := startHour.Unix()
+	endTs := endHour.Unix()
+	modelBuckets := map[string]map[int64]counters{}
+	modelTotals := map[string]counters{}
+
+	for key, value := range merged {
+		hourTs := time.Unix(key.bucketTs, 0).UTC().Truncate(time.Hour).Unix()
+		if hourTs < startTs || hourTs > endTs || value.requestCount <= 0 {
+			continue
+		}
+		mergeModelTotals(modelTotals, key.model, value)
+		mergeModelBucket(modelBuckets, key.model, hourTs, value)
+	}
+
+	models := make([]StatusModel, 0, len(modelTotals))
+	total := counters{}
+	attentionCount := 0
+	criticalCount := 0
+	for modelName, modelTotal := range modelTotals {
+		modelSuccessRate := roundStatusFloat(successRate(modelTotal))
+		if modelSuccessRate < 90 {
+			attentionCount++
+		}
+		if modelSuccessRate < 70 {
+			criticalCount++
+		}
+
+		failureCount := modelTotal.requestCount - modelTotal.successCount
+		if failureCount < 0 {
+			failureCount = 0
+		}
+
+		var avgTtftMs *int64
+		if modelTotal.ttftCount > 0 {
+			value := avg(modelTotal.ttftSumMs, modelTotal.ttftCount)
+			avgTtftMs = &value
+		}
+		var averageTps *float64
+		if modelTotal.outputTokens > 0 && modelTotal.generationMs > 0 {
+			value := roundStatusFloat(avgTps(modelTotal))
+			averageTps = &value
+		}
+
+		buckets := make([]StatusBucket, 0, hours)
+		for offset := 0; offset < hours; offset++ {
+			ts := startHour.Add(time.Duration(offset) * time.Hour).Unix()
+			bucket := StatusBucket{Ts: ts}
+			if value, ok := modelBuckets[modelName][ts]; ok && value.requestCount > 0 {
+				bucket.HasData = true
+				bucket.RequestCount = value.requestCount
+				bucket.SuccessRate = roundStatusFloat(successRate(value))
+			}
+			buckets = append(buckets, bucket)
+		}
+
+		models = append(models, StatusModel{
+			ModelName:    modelName,
+			RequestCount: modelTotal.requestCount,
+			SuccessCount: modelTotal.successCount,
+			FailureCount: failureCount,
+			SuccessRate:  modelSuccessRate,
+			AvgTtftMs:    avgTtftMs,
+			AvgTps:       averageTps,
+			Buckets:      buckets,
+		})
+		total.requestCount += modelTotal.requestCount
+		total.successCount += modelTotal.successCount
+	}
+
+	sort.Slice(models, func(i, j int) bool {
+		if models[i].RequestCount == models[j].RequestCount {
+			return models[i].ModelName < models[j].ModelName
+		}
+		return models[i].RequestCount > models[j].RequestCount
+	})
+
+	return StatusResult{
+		UpdatedAt:   now.Unix(),
+		WindowHours: hours,
+		Summary: StatusSummary{
+			ModelCount:     len(models),
+			RequestCount:   total.requestCount,
+			SuccessCount:   total.successCount,
+			SuccessRate:    roundStatusFloat(successRate(total)),
+			AttentionCount: attentionCount,
+			CriticalCount:  criticalCount,
+		},
+		Models: models,
+	}
+}
+
+func roundStatusFloat(value float64) float64 {
+	return math.Round(value*100) / 100
 }
 
 func mergeModelTotals(totals map[string]counters, modelName string, value counters) {

@@ -24,6 +24,23 @@ import {
 } from '../nav-modules'
 
 describe('header navigation module parsing', () => {
+  test('keeps model status disabled and authenticated for missing and legacy settings', () => {
+    expect(parseHeaderNavModules('').modelStatus).toEqual({
+      enabled: false,
+      requireAuth: true,
+    })
+    expect(
+      parseHeaderNavModules(
+        JSON.stringify({
+          modelStatus: { enabled: true, requireAuth: false },
+        })
+      ).modelStatus
+    ).toEqual({
+      enabled: true,
+      requireAuth: true,
+    })
+  })
+
   test('keeps the user leaderboard disabled for missing and legacy settings', () => {
     expect(parseHeaderNavModules('').rankings).toEqual({
       enabled: true,

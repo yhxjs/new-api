@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as authRouteRouteImport } from './routes/(auth)/route'
 import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
+import { Route as ModelStatusRouteImport } from './routes/model-status'
 import { Route as PrivacyPolicyRouteImport } from './routes/privacy-policy'
 import { Route as RankingsRouteRouteImport } from './routes/rankings/route'
 import { Route as UserAgreementRouteImport } from './routes/user-agreement'
@@ -82,6 +83,11 @@ const authRouteRoute = authRouteRouteImport.update({
 } as any)
 const AuthenticatedRouteRoute = AuthenticatedRouteRouteImport.update({
   id: '/_authenticated',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ModelStatusRoute = ModelStatusRouteImport.update({
+  id: '/model-status',
+  path: '/model-status',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PrivacyPolicyRoute = PrivacyPolicyRouteImport.update({
@@ -409,6 +415,7 @@ const AuthenticatedSystemSettingsSiteSectionRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/rankings': typeof RankingsRouteRouteWithChildren
+  '/model-status': typeof ModelStatusRoute
   '/privacy-policy': typeof PrivacyPolicyRoute
   '/user-agreement': typeof UserAgreementRoute
   '/system-settings': typeof AuthenticatedSystemSettingsRouteRouteWithChildren
@@ -469,6 +476,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/model-status': typeof ModelStatusRoute
   '/privacy-policy': typeof PrivacyPolicyRoute
   '/user-agreement': typeof UserAgreementRoute
   '/forgot-password': typeof authForgotPasswordRoute
@@ -532,6 +540,7 @@ export interface FileRoutesById {
   '/(auth)': typeof authRouteRouteWithChildren
   '/_authenticated': typeof AuthenticatedRouteRouteWithChildren
   '/rankings': typeof RankingsRouteRouteWithChildren
+  '/model-status': typeof ModelStatusRoute
   '/privacy-policy': typeof PrivacyPolicyRoute
   '/user-agreement': typeof UserAgreementRoute
   '/_authenticated/system-settings': typeof AuthenticatedSystemSettingsRouteRouteWithChildren
@@ -595,6 +604,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/rankings'
+    | '/model-status'
     | '/privacy-policy'
     | '/user-agreement'
     | '/system-settings'
@@ -655,6 +665,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/model-status'
     | '/privacy-policy'
     | '/user-agreement'
     | '/forgot-password'
@@ -717,6 +728,7 @@ export interface FileRouteTypes {
     | '/(auth)'
     | '/_authenticated'
     | '/rankings'
+    | '/model-status'
     | '/privacy-policy'
     | '/user-agreement'
     | '/_authenticated/system-settings'
@@ -781,6 +793,7 @@ export interface RootRouteChildren {
   authRouteRoute: typeof authRouteRouteWithChildren
   AuthenticatedRouteRoute: typeof AuthenticatedRouteRouteWithChildren
   RankingsRouteRoute: typeof RankingsRouteRouteWithChildren
+  ModelStatusRoute: typeof ModelStatusRoute
   PrivacyPolicyRoute: typeof PrivacyPolicyRoute
   UserAgreementRoute: typeof UserAgreementRoute
   errors401Route: typeof errors401Route
@@ -816,6 +829,13 @@ declare module '@tanstack/react-router' {
       path: ''
       fullPath: '/'
       preLoaderRoute: typeof AuthenticatedRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/model-status': {
+      id: '/model-status'
+      path: '/model-status'
+      fullPath: '/model-status'
+      preLoaderRoute: typeof ModelStatusRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/privacy-policy': {
@@ -1380,6 +1400,7 @@ const rootRouteChildren: RootRouteChildren = {
   authRouteRoute: authRouteRouteWithChildren,
   AuthenticatedRouteRoute: AuthenticatedRouteRouteWithChildren,
   RankingsRouteRoute: RankingsRouteRouteWithChildren,
+  ModelStatusRoute: ModelStatusRoute,
   PrivacyPolicyRoute: PrivacyPolicyRoute,
   UserAgreementRoute: UserAgreementRoute,
   errors401Route: errors401Route,

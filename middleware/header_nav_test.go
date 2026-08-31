@@ -160,6 +160,46 @@ func TestHeaderNavUserRankingsAuth(t *testing.T) {
 	}
 }
 
+func TestHeaderNavModelStatusAuth(t *testing.T) {
+	tests := []struct {
+		name          string
+		raw           string
+		authenticated bool
+		wantStatus    int
+	}{
+		{
+			name:       "legacy config defaults off",
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "explicitly disabled",
+			raw:        `{"modelStatus":{"enabled":false,"requireAuth":true}}`,
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "enabled still requires login",
+			raw:        `{"modelStatus":{"enabled":true,"requireAuth":false}}`,
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:          "enabled allows authenticated user",
+			raw:           `{"modelStatus":{"enabled":true,"requireAuth":false}}`,
+			authenticated: true,
+			wantStatus:    http.StatusOK,
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			withHeaderNavModules(t, testCase.raw)
+
+			recorder := performHeaderNavRequest(t, HeaderNavModelStatusAuth(), testCase.authenticated)
+
+			require.Equal(t, testCase.wantStatus, recorder.Code)
+		})
+	}
+}
+
 func TestHeaderNavModuleAuthRejectsLegacyDisabledModule(t *testing.T) {
 	raw := `{"rankings":false}`
 	withHeaderNavModules(t, raw)

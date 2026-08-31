@@ -20,6 +20,12 @@ func getHeaderNavAccess(module string) headerNavAccess {
 		Enabled:     true,
 		RequireAuth: false,
 	}
+	if module == "modelStatus" {
+		fallback = headerNavAccess{
+			Enabled:     false,
+			RequireAuth: true,
+		}
+	}
 
 	common.OptionMapRWMutex.RLock()
 	raw := common.OptionMap["HeaderNavModules"]
@@ -144,6 +150,22 @@ func HeaderNavUserRankingsAuth() gin.HandlerFunc {
 		}
 
 		TryUserAuth()(c)
+	}
+}
+
+func HeaderNavModelStatusAuth() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		access := getHeaderNavAccess("modelStatus")
+		if !access.Enabled {
+			c.JSON(http.StatusForbidden, gin.H{
+				"success": false,
+				"message": "model status is disabled",
+			})
+			c.Abort()
+			return
+		}
+
+		UserAuth()(c)
 	}
 }
 

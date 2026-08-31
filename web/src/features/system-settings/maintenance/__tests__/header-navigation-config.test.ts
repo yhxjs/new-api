@@ -21,6 +21,33 @@ import { describe, expect, test } from 'vitest'
 import { parseHeaderNavModules, serializeHeaderNavModules } from '../config'
 
 describe('header navigation settings config', () => {
+  test('keeps model status disabled and authenticated for missing and legacy config', () => {
+    expect(parseHeaderNavModules('').modelStatus).toEqual({
+      enabled: false,
+      requireAuth: true,
+    })
+    expect(
+      parseHeaderNavModules(
+        '{"modelStatus":{"enabled":true,"requireAuth":false}}'
+      ).modelStatus
+    ).toEqual({
+      enabled: true,
+      requireAuth: true,
+    })
+  })
+
+  test('preserves an explicitly enabled model status page when serialized', () => {
+    const parsed = parseHeaderNavModules(
+      '{"modelStatus":{"enabled":true,"requireAuth":false}}'
+    )
+    const roundTrip = parseHeaderNavModules(serializeHeaderNavModules(parsed))
+
+    expect(roundTrip.modelStatus).toEqual({
+      enabled: true,
+      requireAuth: true,
+    })
+  })
+
   test('defaults the user leaderboard to disabled for empty and legacy config', () => {
     expect(parseHeaderNavModules('').rankings.userLeaderboardEnabled).toBe(
       false
