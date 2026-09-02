@@ -24,13 +24,21 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Skeleton } from '@/components/ui/skeleton'
 
 import { formatTokens } from '../lib/format'
-import type { UserRanking } from '../types'
+import type { RankingPeriod, UserRanking } from '../types'
 import { UserModelShareBar } from './user-model-share-bar'
+
+const PERIOD_DESCRIPTIONS: Record<RankingPeriod, string> = {
+  today: 'Users ranked by total token usage across the last 24 hours',
+  week: 'Users ranked by total token usage across the past few weeks',
+  month: 'Users ranked by total token usage across the past month',
+  year: 'Users ranked by total token usage across the past year',
+}
 
 type UserRankingsSectionProps = {
   users: UserRanking[] | undefined
   isLoading: boolean
   error: Error | null
+  period: RankingPeriod
 }
 
 export function UserRankingsSection(props: UserRankingsSectionProps) {
@@ -52,7 +60,7 @@ export function UserRankingsSection(props: UserRankingsSectionProps) {
           {t('User Leaderboard')}
         </h2>
         <p className='text-muted-foreground mt-1 text-sm'>
-          {t('Users ranked by total token usage')}
+          {t(PERIOD_DESCRIPTIONS[props.period])}
         </p>
       </header>
 

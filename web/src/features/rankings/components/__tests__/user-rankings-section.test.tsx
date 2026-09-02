@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { render, screen, within } from '@testing-library/react'
 import { describe, expect, test } from 'vitest'
 
-import type { UserRanking } from '../../types'
+import type { RankingPeriod, UserRanking } from '../../types'
 import { UserRankingsSection } from '../user-rankings-section'
 
 const USERS: UserRanking[] = [
@@ -40,7 +40,14 @@ const USERS: UserRanking[] = [
 
 describe('user rankings section', () => {
   test('shows an isolated loading state', () => {
-    render(<UserRankingsSection users={undefined} isLoading error={null} />)
+    render(
+      <UserRankingsSection
+        users={undefined}
+        isLoading
+        error={null}
+        period='week'
+      />
+    )
 
     expect(
       screen.getByRole('status', { name: 'Loading user rankings' })
@@ -53,6 +60,7 @@ describe('user rankings section', () => {
         users={undefined}
         isLoading={false}
         error={new Error('request failed')}
+        period='week'
       />
     )
 
@@ -60,7 +68,14 @@ describe('user rankings section', () => {
   })
 
   test('shows the empty state when no users consumed tokens', () => {
-    render(<UserRankingsSection users={[]} isLoading={false} error={null} />)
+    render(
+      <UserRankingsSection
+        users={[]}
+        isLoading={false}
+        error={null}
+        period='week'
+      />
+    )
 
     expect(
       screen.getByText('No user ranking data available')
@@ -68,12 +83,38 @@ describe('user rankings section', () => {
   })
 
   test('renders ranked users as one list with totals and model shares', () => {
-    render(<UserRankingsSection users={USERS} isLoading={false} error={null} />)
+    render(
+      <UserRankingsSection
+        users={USERS}
+        isLoading={false}
+        error={null}
+        period='week'
+      />
+    )
 
     const section = screen.getByRole('region', { name: 'User Leaderboard' })
     expect(within(section).getAllByRole('listitem')).toHaveLength(1)
     expect(within(section).getByText('alice')).toBeInTheDocument()
     expect(within(section).getByText('1.2K')).toBeInTheDocument()
     expect(within(section).getByText('model-a')).toBeInTheDocument()
+  })
+
+  test.each<[RankingPeriod, string]>([
+    ['today', 'Users ranked by total token usage across the last 24 hours'],
+    ['week', 'Users ranked by total token usage across the past few weeks'],
+    ['month', 'Users ranked by total token usage across the past month'],
+    ['year', 'Users ranked by total token usage across the past year'],
+  ])('describes the %s period range under the heading', (period, expected) => {
+    render(
+      <UserRankingsSection
+        users={USERS}
+        isLoading={false}
+        error={null}
+        period={period}
+      />
+    )
+
+    const section = screen.getByRole('region', { name: 'User Leaderboard' })
+    expect(within(section).getByText(expected)).toBeInTheDocument()
   })
 })

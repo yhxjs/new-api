@@ -41,7 +41,12 @@ vi.mock('../hooks/use-rankings', () => ({
 }))
 
 vi.mock('../components', () => ({
-  UserRankingsSection: () => <div>user route rankings</div>,
+  UserRankingsSection: (props: { period: string }) => (
+    <div>
+      user route rankings
+      <span>{props.period}</span>
+    </div>
+  ),
 }))
 
 describe('user rankings route page', () => {
@@ -60,5 +65,11 @@ describe('user rankings route page', () => {
 
     expect(screen.getByText('user route rankings')).toBeInTheDocument()
     expect(mocks.useRankings).not.toHaveBeenCalled()
+  })
+
+  test('the selected period reaches the user leaderboard section', () => {
+    render(<UserRankingsPage />)
+
+    expect(screen.getByText('month')).toBeInTheDocument()
   })
 })

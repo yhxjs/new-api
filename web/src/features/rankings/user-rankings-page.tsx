@@ -35,6 +35,7 @@ export function UserRankingsPage() {
       users={query.data?.data.users}
       isLoading={query.isLoading}
       error={query.error}
+      period={period}
     />
   )
 }
