@@ -25,17 +25,20 @@ For commercial licensing, please contact support@quantumnous.com
 
 export const THEME_PRESETS = [
   {
-    value: 'default',
-    name: 'Default',
-    swatches: ['oklch(0.72 0.18 250)', 'oklch(0.7 0.12 280)'],
-  },
-  {
     // Inspired by Anthropic's official brand language: warm cream canvas
     // (#faf9f5) paired with clay/coral (#d97757) as the single accent.
     // Swatches preview the canvas → accent gradient that defines the system.
+    // Shipped as the out-of-the-box preset, so it leads the list.
     value: 'anthropic',
     name: 'Anthropic',
     swatches: ['oklch(0.984 0.005 95)', 'oklch(0.685 0.142 38)'],
+  },
+  {
+    // The neutral base palette from ../styles/theme.css. The `default` value
+    // stays as-is because the preset opt-outs in theme-presets.css key off it.
+    value: 'default',
+    name: 'Classic',
+    swatches: ['oklch(0.72 0.18 250)', 'oklch(0.7 0.12 280)'],
   },
   {
     value: 'simple-large',
@@ -88,9 +91,9 @@ export type ContentLayout = 'full' | 'centered'
  * Font axis for the theme.
  *
  * - `default` — resolve at runtime from the active preset
- *   (see `PRESET_DEFAULT_FONT`). The shipped `default` and `anthropic`
- *   presets resolve to serif; other named color presets fall back to
- *   sans unless they list a different choice. Mirrors how
+ *   (see `PRESET_DEFAULT_FONT`). The shipped `anthropic` preset resolves
+ *   to serif; the neutral base palette and the other named color presets
+ *   fall back to sans unless they list a different choice. Mirrors how
  *   `radius: 'default'` defers to a per-preset hint.
  * - `sans` — humanist sans (Public Sans), the project's UI fallback.
  * - `serif` — editorial serif (Lora + CJK fallbacks), the project's
@@ -116,7 +119,7 @@ export type ThemeCustomization = {
 }
 
 export const DEFAULT_THEME_CUSTOMIZATION: ThemeCustomization = {
-  preset: 'default',
+  preset: 'anthropic',
   font: 'default',
   radius: 'default',
   scale: 'default',
@@ -168,10 +171,10 @@ export const THEME_COOKIE_KEYS = {
  *
  * Co-located with the preset registry so a preset's signature typography
  * is declared in one place. Presets not listed here fall back to the
- * `resolveThemeFont` default of `sans`. The shipped `default` preset
- * opts into serif so the editorial Lora voice is the out-of-the-box
- * experience; vivid color presets stay on the humanist sans so their
- * accents read clearly without competing with the body type.
+ * `resolveThemeFont` default of `sans`. The shipped default preset
+ * (`anthropic`) opts into serif so the editorial Lora voice is the
+ * out-of-the-box experience; vivid color presets stay on the humanist sans
+ * so their accents read clearly without competing with the body type.
  */
 export const PRESET_DEFAULT_FONT: Partial<
   Record<ThemePreset, ResolvedThemeFont>
