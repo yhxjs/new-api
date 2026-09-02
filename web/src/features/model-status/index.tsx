@@ -45,6 +45,7 @@ import {
 } from '@/components/ui/input-group'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Skeleton } from '@/components/ui/skeleton'
+import { cn } from '@/lib/utils'
 
 import { getModelStatus } from './api'
 import { ModelStatusCard } from './components/model-status-card'
@@ -147,6 +148,22 @@ export function ModelStatusPage() {
                 {t('First token latency')} ↓
               </NativeSelectOption>
             </NativeSelect>
+            <Button
+              variant='outline'
+              size='icon'
+              onClick={() => void statusQuery.refetch()}
+              disabled={statusQuery.isFetching}
+              aria-label={t('Refresh')}
+              className='self-end sm:self-auto'
+            >
+              <RefreshCw
+                className={cn(
+                  'size-4',
+                  statusQuery.isFetching && 'animate-spin'
+                )}
+                aria-hidden='true'
+              />
+            </Button>
           </div>
         </header>
 

@@ -247,4 +247,37 @@ describe('model status page', () => {
     ).toBeVisible()
     expect(mocks.getModelStatus).toHaveBeenCalledTimes(2)
   })
+
+  test('refetches the current snapshot when the refresh button is clicked', async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByRole('heading', { name: 'alpha-large' })
+
+    await user.click(screen.getByRole('button', { name: 'Refresh' }))
+
+    await waitFor(() => {
+      expect(mocks.getModelStatus).toHaveBeenCalledTimes(2)
+    })
+    expect(mocks.getModelStatus).toHaveBeenLastCalledWith('all')
+  })
+
+  test('disables the refresh button while a snapshot request is in flight', async () => {
+    let resolveSnapshot: (value: ModelStatusResponse) => void = () => undefined
+    mocks.getModelStatus.mockImplementationOnce(
+      () =>
+        new Promise<ModelStatusResponse>((resolve) => {
+          resolveSnapshot = resolve
+        })
+    )
+    renderPage()
+
+    expect(screen.getByRole('button', { name: 'Refresh' })).toBeDisabled()
+
+    resolveSnapshot(response())
+
+    expect(
+      await screen.findByRole('heading', { name: 'alpha-large' })
+    ).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Refresh' })).toBeEnabled()
+  })
 })
