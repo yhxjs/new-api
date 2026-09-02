@@ -23,14 +23,18 @@ import { RankingsHero } from '../rankings-hero'
 
 vi.mock('@tanstack/react-router', () => ({
   Link: (props: {
+    'aria-selected'?: boolean
     children: React.ReactNode
+    className?: string
+    role?: string
     search: { period: string }
     to: string
   }) => (
     <a
       href={`${props.to}?period=${props.search.period}`}
-      role='tab'
-      aria-selected={props.to.endsWith('/users')}
+      role={props.role}
+      aria-selected={props['aria-selected']}
+      className={props.className}
     >
       {props.children}
     </a>
@@ -82,5 +86,44 @@ describe('rankings hero route tabs', () => {
     expect(
       within(routeTabs).queryByRole('tab', { name: 'User Leaderboard' })
     ).not.toBeInTheDocument()
+  })
+})
+
+describe('rankings hero route tab indicator', () => {
+  test('shows the indicator on the active route tab only', () => {
+    renderHero()
+
+    const routeTabs = screen.getByRole('tablist', { name: 'Rankings' })
+    const activeTab = within(routeTabs).getByRole('tab', {
+      name: 'User Leaderboard',
+    })
+    const inactiveTab = within(routeTabs).getByRole('tab', {
+      name: 'Overall Leaderboard',
+    })
+
+    expect(activeTab.querySelector('span[aria-hidden]')).toHaveClass(
+      'opacity-100'
+    )
+    expect(inactiveTab.querySelector('span[aria-hidden]')).toHaveClass(
+      'opacity-0'
+    )
+  })
+
+  test('anchors the indicator inside the scrollable tablist so it is not clipped', () => {
+    renderHero()
+
+    const routeTabs = screen.getByRole('tablist', { name: 'Rankings' })
+    const activeTab = within(routeTabs).getByRole('tab', {
+      name: 'User Leaderboard',
+    })
+
+    // `overflow-x-auto` makes the tablist clip vertically too, so the
+    // indicator and the tab must stay within its padding box and the bottom
+    // border must live on the non-scrolling wrapper.
+    expect(routeTabs).toHaveClass('overflow-x-auto')
+    expect(routeTabs.className).not.toContain('border-b')
+    expect(routeTabs.parentElement).toHaveClass('border-b')
+    expect(activeTab.className).not.toContain('-mb-px')
+    expect(activeTab.querySelector('span[aria-hidden]')).toHaveClass('bottom-0')
   })
 })

@@ -57,56 +57,60 @@ export function RankingsHero(props: RankingsHeroProps) {
         </p>
       </div>
 
-      <div
-        role='tablist'
-        aria-label={t('Rankings')}
-        className='border-border/60 flex items-center gap-6 overflow-x-auto border-b'
-      >
-        <Link
-          role='tab'
-          aria-selected={props.activeView === 'overall'}
-          to='/rankings'
-          search={{ period: props.period }}
-          className={cn(
-            'focus-visible:ring-ring/40 relative -mb-px shrink-0 px-1 py-2.5 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none',
-            props.activeView === 'overall'
-              ? 'text-foreground'
-              : 'text-muted-foreground hover:text-foreground'
-          )}
+      {/* The border sits on the wrapper because `overflow-x-auto` also clips
+          vertically, which would hide the active tab indicator. */}
+      <div className='border-border/60 border-b'>
+        <div
+          role='tablist'
+          aria-label={t('Rankings')}
+          className='flex items-center gap-6 overflow-x-auto'
         >
-          {t('Overall Leaderboard')}
-          <span
-            aria-hidden
-            className={cn(
-              'bg-foreground absolute inset-x-0 -bottom-px h-[2px] rounded-full transition-opacity',
-              props.activeView === 'overall' ? 'opacity-100' : 'opacity-0'
-            )}
-          />
-        </Link>
-
-        {props.userLeaderboardEnabled ? (
           <Link
             role='tab'
-            aria-selected={props.activeView === 'users'}
-            to='/rankings/users'
+            aria-selected={props.activeView === 'overall'}
+            to='/rankings'
             search={{ period: props.period }}
             className={cn(
-              'focus-visible:ring-ring/40 relative -mb-px shrink-0 px-1 py-2.5 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none',
-              props.activeView === 'users'
+              'focus-visible:ring-ring/40 relative shrink-0 px-1 py-2.5 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none',
+              props.activeView === 'overall'
                 ? 'text-foreground'
                 : 'text-muted-foreground hover:text-foreground'
             )}
           >
-            {t('User Leaderboard')}
+            {t('Overall Leaderboard')}
             <span
               aria-hidden
               className={cn(
-                'bg-foreground absolute inset-x-0 -bottom-px h-[2px] rounded-full transition-opacity',
-                props.activeView === 'users' ? 'opacity-100' : 'opacity-0'
+                'bg-foreground absolute inset-x-0 bottom-0 h-[2px] rounded-full transition-opacity',
+                props.activeView === 'overall' ? 'opacity-100' : 'opacity-0'
               )}
             />
           </Link>
-        ) : null}
+
+          {props.userLeaderboardEnabled ? (
+            <Link
+              role='tab'
+              aria-selected={props.activeView === 'users'}
+              to='/rankings/users'
+              search={{ period: props.period }}
+              className={cn(
+                'focus-visible:ring-ring/40 relative shrink-0 px-1 py-2.5 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none',
+                props.activeView === 'users'
+                  ? 'text-foreground'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              {t('User Leaderboard')}
+              <span
+                aria-hidden
+                className={cn(
+                  'bg-foreground absolute inset-x-0 bottom-0 h-[2px] rounded-full transition-opacity',
+                  props.activeView === 'users' ? 'opacity-100' : 'opacity-0'
+                )}
+              />
+            </Link>
+          ) : null}
+        </div>
       </div>
 
       {/* Underline tabs for period — clean and unobtrusive. */}
