@@ -27,9 +27,26 @@ export function safeDivide(
   precision: number = 3
 ): number {
   const result = value / divisor
-  if (isNaN(result) || !isFinite(result)) return 0
+  if (Number.isNaN(result) || !Number.isFinite(result)) return 0
   const factor = Math.pow(10, precision)
   return Math.round(result * factor) / factor
+}
+
+/**
+ * Calculate cache hit rate as percentage (0-100).
+ * cache hit rate = (cacheTokens / promptTokens) * 100.
+ * Returns 0 if promptTokens <= 0 or result is invalid.
+ */
+export function calculateCacheHitRate(
+  cacheTokens: number,
+  promptTokens: number,
+  precision: number = 1
+): number {
+  if (!promptTokens || promptTokens <= 0 || !cacheTokens || cacheTokens <= 0) {
+    return 0
+  }
+  const rate = (cacheTokens / promptTokens) * 100
+  return safeDivide(rate, 1, precision)
 }
 
 /**
@@ -41,7 +58,19 @@ export function calculateDashboardStats(data: QuotaDataItem[]) {
       totalQuota: acc.totalQuota + (Number(item.quota) || 0),
       totalCount: acc.totalCount + (Number(item.count) || 0),
       totalTokens: acc.totalTokens + (Number(item.token_used) || 0),
+      totalPromptTokens:
+        acc.totalPromptTokens + (Number(item.prompt_tokens) || 0),
+      totalCompletionTokens:
+        acc.totalCompletionTokens + (Number(item.completion_tokens) || 0),
+      totalCacheTokens: acc.totalCacheTokens + (Number(item.cache_tokens) || 0),
     }),
-    { totalQuota: 0, totalCount: 0, totalTokens: 0 }
+    {
+      totalQuota: 0,
+      totalCount: 0,
+      totalTokens: 0,
+      totalPromptTokens: 0,
+      totalCompletionTokens: 0,
+      totalCacheTokens: 0,
+    }
   )
 }

@@ -25,6 +25,7 @@ import { getUserQuotaDates } from '@/features/dashboard/api'
 import { useModelStatCardsConfig } from '@/features/dashboard/hooks/use-dashboard-config'
 import {
   buildQueryParams,
+  calculateCacheHitRate,
   calculateDashboardStats,
   getDefaultDays,
 } from '@/features/dashboard/lib'
@@ -59,7 +60,7 @@ function formatStatNumber(value: number, locale: Intl.LocalesArgument) {
 }
 
 export function LogStatCards(props: LogStatCardsProps) {
-  const { i18n } = useTranslation()
+  const { t, i18n } = useTranslation()
   const statCardsConfig = useModelStatCardsConfig()
   const user = useAuthStore((state) => state.auth.user)
   const isAdmin = !!(user?.role && user.role >= 10)
@@ -67,6 +68,9 @@ export function LogStatCards(props: LogStatCardsProps) {
     totalQuota: number
     totalCount: number
     totalTokens: number
+    totalPromptTokens: number
+    totalCompletionTokens: number
+    totalCacheTokens: number
   } | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
@@ -133,6 +137,7 @@ export function LogStatCards(props: LogStatCardsProps) {
         : formatStatNumber(rawValue, locale)
 
     return {
+      key: config.key,
       title: config.title,
       value: formatted.displayValue,
       fullValue: formatted.fullValue,
@@ -141,6 +146,16 @@ export function LogStatCards(props: LogStatCardsProps) {
       iconTone: config.iconTone,
     }
   })
+
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
+  const promptTokens = stats?.totalPromptTokens ?? 0
+  const completionTokens = stats?.totalCompletionTokens ?? 0
+  const cacheTokens = stats?.totalCacheTokens ?? 0
+  const cacheHitRate = calculateCacheHitRate(cacheTokens, promptTokens)
+
+  const promptFormatted = formatStatNumber(promptTokens, locale)
+  const completionFormatted = formatStatNumber(completionTokens, locale)
+  const cacheTokensFormatted = formatStatNumber(cacheTokens, locale)
 
   return (
     <div className='overflow-hidden rounded-lg border'>
@@ -151,7 +166,12 @@ export function LogStatCards(props: LogStatCardsProps) {
           if (loading) {
             valueContent = (
               <div className='mt-1 flex flex-col gap-1 sm:mt-2 sm:gap-1.5'>
-                <Skeleton className='h-5 w-16 sm:h-7 sm:w-20' />
+                <div className='flex items-baseline justify-between gap-2'>
+                  <Skeleton className='h-5 w-16 sm:h-7 sm:w-20' />
+                  {it.key === 'tokens' && (
+                    <Skeleton className='hidden h-3.5 w-24 sm:block' />
+                  )}
+                </div>
                 <Skeleton className='hidden h-3.5 w-28 md:block' />
               </div>
             )
@@ -165,6 +185,39 @@ export function LogStatCards(props: LogStatCardsProps) {
                   {it.desc}
                 </div>
               </>
+            )
+          } else if (it.key === 'tokens') {
+            valueContent = (
+              <div className='mt-1 flex flex-col gap-0.5 sm:mt-2 sm:gap-1'>
+                <div className='flex min-w-0 flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5'>
+                  <div
+                    className='text-foreground truncate font-mono text-base leading-tight font-bold tracking-tight tabular-nums sm:text-2xl sm:leading-normal'
+                    title={it.fullValue}
+                  >
+                    {it.value}
+                  </div>
+                  <div className='text-muted-foreground/80 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 font-mono text-[10px] leading-tight tabular-nums sm:text-xs'>
+                    <span title={`${t('Input')}: ${promptFormatted.fullValue}`}>
+                      {t('Input')}: {promptFormatted.displayValue}
+                    </span>
+                    <span className='text-muted-foreground/30'>/</span>
+                    <span
+                      title={`${t('Output')}: ${completionFormatted.fullValue}`}
+                    >
+                      {t('Output')}: {completionFormatted.displayValue}
+                    </span>
+                    <span className='text-muted-foreground/30'>/</span>
+                    <span
+                      title={`${t('Cache Hit Rate')}: ${cacheHitRate}% (${t('Cache')}: ${cacheTokensFormatted.fullValue})`}
+                    >
+                      {t('Cache Hit Rate')}: {cacheHitRate}%
+                    </span>
+                  </div>
+                </div>
+                <div className='text-muted-foreground/60 hidden text-xs md:block'>
+                  {it.desc}
+                </div>
+              </div>
             )
           } else {
             valueContent = (

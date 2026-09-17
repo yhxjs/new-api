@@ -454,13 +454,20 @@ export function FlowCharts(props: FlowChartsProps) {
   const chartTitle = t('Flow')
   const flowSpec = useMemo(
     () =>
-      buildFlowSankeySpec(flowData.flow, chartTitle, formatQuota, {
-        quota: t('Quota'),
-        tokens: t('Tokens'),
-        requests: t('Requests'),
-        share: t('Share'),
-      }),
-    [chartTitle, flowData.flow, t]
+      buildFlowSankeySpec(
+        flowData.flow,
+        chartTitle,
+        formatQuota,
+        {
+          quota: t('Quota'),
+          tokens: t('Tokens'),
+          requests: t('Requests'),
+          share: t('Share'),
+          cacheHitRate: t('Cache Hit Rate'),
+        },
+        metric
+      ),
+    [chartTitle, flowData.flow, metric, t]
   )
   const chartTheme = resolvedTheme === 'dark' ? 'dark' : 'light'
   const chartKey = [

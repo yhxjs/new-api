@@ -34,6 +34,7 @@ import type {
 } from '@/features/dashboard/types'
 
 import { getDashboardChartColors } from './charts'
+import { calculateCacheHitRate } from './stats'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type VChartSpec = Record<string, any>
@@ -42,6 +43,9 @@ type FlowMetrics = {
   quota: number
   tokens: number
   requests: number
+  promptTokens: number
+  completionTokens: number
+  cacheTokens: number
 }
 
 type FlowSankeyLabels = {
@@ -49,6 +53,7 @@ type FlowSankeyLabels = {
   tokens: string
   requests: string
   share: string
+  cacheHitRate?: string
 }
 
 type FlowPathNode = {
@@ -96,6 +101,7 @@ const DEFAULT_FLOW_SANKEY_LABELS: FlowSankeyLabels = {
   tokens: 'Tokens',
   requests: 'Requests',
   share: 'Share',
+  cacheHitRate: 'Cache Hit Rate',
 }
 
 const DEFAULT_FLOW_CHART_COLOR = '#1664FF'
@@ -158,6 +164,9 @@ function rowMetrics(row: FlowQuotaDataItem): FlowMetrics {
     quota: numberValue(row.quota),
     tokens: numberValue(row.token_used),
     requests: numberValue(row.count),
+    promptTokens: numberValue(row.prompt_tokens),
+    completionTokens: numberValue(row.completion_tokens),
+    cacheTokens: numberValue(row.cache_tokens),
   }
 }
 
@@ -425,6 +434,9 @@ function addNode(
     requests: 0,
     quota: 0,
     tokens: 0,
+    promptTokens: 0,
+    completionTokens: 0,
+    cacheTokens: 0,
     color,
     colorKey,
   }
@@ -432,6 +444,10 @@ function addNode(
   previous.requests += metrics.requests
   previous.quota += metrics.quota
   previous.tokens += metrics.tokens
+  previous.promptTokens = (previous.promptTokens ?? 0) + metrics.promptTokens
+  previous.completionTokens =
+    (previous.completionTokens ?? 0) + metrics.completionTokens
+  previous.cacheTokens = (previous.cacheTokens ?? 0) + metrics.cacheTokens
   map.set(pathNode.id, previous)
 }
 
@@ -452,6 +468,9 @@ function addLink(
     requests: 0,
     quota: 0,
     tokens: 0,
+    promptTokens: 0,
+    completionTokens: 0,
+    cacheTokens: 0,
     sourceLabel: source.label,
     targetLabel: target.label,
     color,
@@ -465,6 +484,10 @@ function addLink(
   previous.requests += metrics.requests
   previous.quota += metrics.quota
   previous.tokens += metrics.tokens
+  previous.promptTokens = (previous.promptTokens ?? 0) + metrics.promptTokens
+  previous.completionTokens =
+    (previous.completionTokens ?? 0) + metrics.completionTokens
+  previous.cacheTokens = (previous.cacheTokens ?? 0) + metrics.cacheTokens
   map.set(key, previous)
 }
 
@@ -1081,7 +1104,8 @@ export function flowNodeFilterFromSankeyDatum(
 
 function tooltipMetricLines(
   valueFormatter: (value: number) => string,
-  labels: FlowSankeyLabels
+  labels: FlowSankeyLabels,
+  metric?: FlowMetric
 ) {
   const metricValue = (datum: Record<string, unknown>, key: string) =>
     numberValue(sankeyDatumValue(datum, key))
@@ -1090,7 +1114,11 @@ function tooltipMetricLines(
   const hasMetric = (datum: Record<string, unknown>, key: string) =>
     metricValue(datum, key) > 0
 
-  return [
+  const lines: Array<{
+    key: string
+    value: (datum: Record<string, unknown>) => string
+    visible?: (datum: Record<string, unknown>) => boolean
+  }> = [
     {
       key: labels.quota,
       value: (datum: Record<string, unknown>) =>
@@ -1101,6 +1129,21 @@ function tooltipMetricLines(
       value: (datum: Record<string, unknown>) =>
         formattedNumber(datum, 'tokens'),
     },
+  ]
+
+  if (metric === 'tokens') {
+    lines.push({
+      key: labels.cacheHitRate ?? 'Cache Hit Rate',
+      value: (datum: Record<string, unknown>) => {
+        const cacheTokens = metricValue(datum, 'cacheTokens')
+        const promptTokens = metricValue(datum, 'promptTokens')
+        const rate = calculateCacheHitRate(cacheTokens, promptTokens)
+        return `${rate}%`
+      },
+    })
+  }
+
+  lines.push(
     {
       key: labels.requests,
       value: (datum: Record<string, unknown>) =>
@@ -1111,15 +1154,18 @@ function tooltipMetricLines(
       value: (datum: Record<string, unknown>) =>
         `${(metricValue(datum, 'share') * 100).toFixed(1)}%`,
       visible: (datum: Record<string, unknown>) => hasMetric(datum, 'share'),
-    },
-  ]
+    }
+  )
+
+  return lines
 }
 
 export function buildFlowSankeySpec(
   flow: DashboardFlowGraph,
   title: string,
   valueFormatter: (value: number) => string = formatNumber,
-  labels: FlowSankeyLabels = DEFAULT_FLOW_SANKEY_LABELS
+  labels: FlowSankeyLabels = DEFAULT_FLOW_SANKEY_LABELS,
+  metric?: FlowMetric
 ): VChartSpec {
   return {
     type: 'sankey',
@@ -1137,6 +1183,9 @@ export function buildFlowSankeySpec(
               requests: node.requests,
               quota: node.quota,
               tokens: node.tokens,
+              promptTokens: node.promptTokens,
+              completionTokens: node.completionTokens,
+              cacheTokens: node.cacheTokens,
               color: node.color,
               colorKey: node.colorKey,
               highlighted: node.highlighted,
@@ -1163,6 +1212,9 @@ export function buildFlowSankeySpec(
                   requests: link.requests,
                   quota: link.quota,
                   tokens: link.tokens,
+                  promptTokens: link.promptTokens,
+                  completionTokens: link.completionTokens,
+                  cacheTokens: link.cacheTokens,
                   color: link.color,
                   linkColor: link.linkColor,
                   linkAlpha: link.linkAlpha,
@@ -1326,7 +1378,7 @@ export function buildFlowSankeySpec(
             return `${sankeyDatumValue(datum, 'name') ?? sankeyDatumValue(datum, 'rawLabel') ?? ''}`
           },
         },
-        content: tooltipMetricLines(valueFormatter, labels),
+        content: tooltipMetricLines(valueFormatter, labels, metric),
       },
     },
     background: { fill: 'transparent' },

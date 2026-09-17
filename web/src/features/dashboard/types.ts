@@ -31,6 +31,9 @@ export interface QuotaDataItem {
   token_used?: number
   count?: number
   quota?: number
+  prompt_tokens?: number
+  completion_tokens?: number
+  cache_tokens?: number
 }
 
 export interface FlowQuotaDataItem {
@@ -46,6 +49,9 @@ export interface FlowQuotaDataItem {
   token_used?: number
   count?: number
   quota?: number
+  prompt_tokens?: number
+  completion_tokens?: number
+  cache_tokens?: number
 }
 
 export type FlowMetric = 'quota' | 'tokens' | 'requests'
@@ -100,6 +106,9 @@ export interface DashboardFlowNode {
   requests: number
   quota: number
   tokens: number
+  promptTokens?: number
+  completionTokens?: number
+  cacheTokens?: number
   color: string
   colorKey: string
   highlighted?: boolean
@@ -113,6 +122,9 @@ export interface DashboardFlowLink {
   requests: number
   quota: number
   tokens: number
+  promptTokens?: number
+  completionTokens?: number
+  cacheTokens?: number
   sourceLabel: string
   targetLabel: string
   color: string

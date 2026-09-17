@@ -403,17 +403,28 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		logger.LogError(c, "failed to record log: "+err.Error())
 	}
 	if common.DataExportEnabled {
+		cacheTokens := 0
+		if params.Other != nil {
+			if ct, ok := params.Other["cache_tokens"].(int); ok {
+				cacheTokens = ct
+			} else if ctFloat, ok := params.Other["cache_tokens"].(float64); ok {
+				cacheTokens = int(ctFloat)
+			}
+		}
 		LogQuotaData(QuotaDataLogParams{
-			UserID:    userId,
-			Username:  username,
-			ModelName: params.ModelName,
-			Quota:     params.Quota,
-			CreatedAt: createdAt,
-			TokenUsed: params.PromptTokens + params.CompletionTokens,
-			UseGroup:  params.Group,
-			TokenID:   params.TokenId,
-			ChannelID: params.ChannelId,
-			NodeName:  common.NodeName,
+			UserID:           userId,
+			Username:         username,
+			ModelName:        params.ModelName,
+			Quota:            params.Quota,
+			CreatedAt:        createdAt,
+			TokenUsed:        params.PromptTokens + params.CompletionTokens,
+			PromptTokens:     params.PromptTokens,
+			CompletionTokens: params.CompletionTokens,
+			CacheTokens:      cacheTokens,
+			UseGroup:         params.Group,
+			TokenID:          params.TokenId,
+			ChannelID:        params.ChannelId,
+			NodeName:         common.NodeName,
 		})
 	}
 }

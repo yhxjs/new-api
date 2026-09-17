@@ -733,6 +733,7 @@
     "By requests": "リクエスト数別",
     "By tokens": "トークン数別",
     "Cache": "キャッシュ",
+    "Cache Hit Rate": "キャッシュヒット率",
     "Cache create (1h) price": "キャッシュ作成価格 (1時間)",
     "Cache create price": "キャッシュ作成価格",
     "Cache Creation": "キャッシュ作成",

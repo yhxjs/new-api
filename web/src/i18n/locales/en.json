@@ -733,6 +733,7 @@
     "By requests": "By requests",
     "By tokens": "By tokens",
     "Cache": "Cache",
+    "Cache Hit Rate": "Cache Hit Rate",
     "Cache create (1h) price": "Cache create (1h) price",
     "Cache create price": "Cache create price",
     "Cache Creation": "Cache Creation",

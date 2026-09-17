@@ -733,6 +733,7 @@
     "By requests": "По запросам",
     "By tokens": "По токенам",
     "Cache": "Кэш",
+    "Cache Hit Rate": "Частота попаданий в кэш",
     "Cache create (1h) price": "Цена создания кэша (1 ч)",
     "Cache create price": "Цена создания кэша",
     "Cache Creation": "Создание кэша",

@@ -738,6 +738,65 @@ describe('dashboard flow data', () => {
     ])
   })
 
+  test('includes cache hit rate under Tokens tooltip line when metric is tokens', () => {
+    const tokenRows: FlowQuotaDataItem[] = [
+      {
+        user_id: 1,
+        username: 'alice',
+        use_group: 'vip',
+        channel_id: 101,
+        channel_name: 'east',
+        model_name: 'gpt-4.1',
+        quota: 100,
+        token_used: 1200,
+        count: 2,
+        prompt_tokens: 1000,
+        completion_tokens: 200,
+        cache_tokens: 450,
+      },
+    ]
+    const result = buildDashboardFlowData(tokenRows, 'tokens', {
+      role: 'root',
+    })
+    const flowSpec = buildFlowSankeySpec(
+      result.flow,
+      'Flow',
+      undefined,
+      {
+        quota: '额度',
+        tokens: 'Token',
+        requests: '请求数',
+        share: '占比',
+        cacheHitRate: '缓存命中率',
+      },
+      'tokens'
+    )
+    const values = flowSpec.data[0].values[0]
+    const userNodeLink = values.links[0]
+    const tooltipRows = flowSpec.tooltip.mark.content
+
+    expect(
+      tooltipRows
+        .filter((row: Record<string, unknown>) =>
+          typeof row.visible === 'function'
+            ? row.visible({ datum: userNodeLink })
+            : true
+        )
+        .map((row: Record<string, unknown>) => [
+          row.key,
+          typeof row.value === 'function'
+            ? row.value({ datum: userNodeLink })
+            : row.value,
+        ])
+    ).toEqual([
+      ['额度', '100'],
+      ['Token', '1,200'],
+      ['缓存命中率', '45%'],
+      ['请求数', '2'],
+      ['占比', '100.0%'],
+    ])
+  })
+
   test('maps active flow highlight states into the Sankey spec', () => {
     const result = buildDashboardFlowData(rows, 'quota', {
       role: 'root',
