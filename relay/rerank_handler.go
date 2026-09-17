@@ -43,11 +43,14 @@ func RerankHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 
 	var requestBody io.Reader
 	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
-		storage, err := common.GetBodyStorage(c)
+		body, closer, err := relaycommon.NewPassThroughRequestBody(c, info.UpstreamModelName, info.IsModelMapped)
 		if err != nil {
 			return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 		}
-		requestBody = common.NewReplayableBodyReader(storage)
+		if closer != nil {
+			defer closer.Close()
+		}
+		requestBody = body
 	} else {
 		convertedRequest, err := adaptor.ConvertRerankRequest(c, info.RelayMode, *request)
 		if err != nil {

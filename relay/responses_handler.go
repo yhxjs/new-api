@@ -78,11 +78,14 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	adaptor.Init(info)
 	var requestBody io.Reader
 	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
-		storage, err := common.GetBodyStorage(c)
+		body, closer, err := relaycommon.NewPassThroughRequestBody(c, info.UpstreamModelName, info.IsModelMapped)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
 		}
-		requestBody = common.NewReplayableBodyReader(storage)
+		if closer != nil {
+			defer closer.Close()
+		}
+		requestBody = body
 	} else {
 		convertedRequest, err := adaptor.ConvertOpenAIResponsesRequest(c, info, *request)
 		if err != nil {

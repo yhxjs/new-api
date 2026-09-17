@@ -69,6 +69,7 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
+	passThroughModelName := info.UpstreamModelName
 
 	if model_setting.GetGeminiSettings().ThinkingAdapterEnabled {
 		if isNoThinkingRequest(request) {
@@ -137,11 +138,14 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 
 	var requestBody io.Reader
 	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
-		storage, err := common.GetBodyStorage(c)
+		body, closer, err := relaycommon.NewPassThroughRequestBody(c, passThroughModelName, info.IsModelMapped)
 		if err != nil {
 			return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 		}
-		requestBody = common.NewReplayableBodyReader(storage)
+		if closer != nil {
+			defer closer.Close()
+		}
+		requestBody = body
 	} else {
 		// 使用 ConvertGeminiRequest 转换请求格式
 		convertedRequest, err := adaptor.ConvertGeminiRequest(c, info, request)
