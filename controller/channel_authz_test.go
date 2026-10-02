@@ -9,7 +9,9 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -61,6 +63,56 @@ func TestChannelHasSensitiveChanges(t *testing.T) {
 		assert.True(t, channelHasSensitiveChanges(&updated, origin, map[string]any{"header_override": newHeaderOverride}))
 	})
 
+	t.Run("settings change outside balance_query stays sensitive", func(t *testing.T) {
+		origin.SetOtherSettings(dto.ChannelOtherSettings{
+			BalanceQuery: &dto.ChannelBalanceQuery{Mode: dto.BalanceQueryModeUserAPI, AccessToken: "pat-secret", UserId: "1"},
+			AdvancedCustom: &dto.AdvancedCustomConfig{Routes: []dto.AdvancedCustomRoute{
+				{IncomingPath: "/v1/chat", UpstreamPath: "/v1/chat"},
+			}},
+		})
+
+		// A redacted balance-query round-trip with no other edit is not
+		// sensitive — after RestoreBalanceQueryAccessToken, the same merge
+		// UpdateChannel performs before this check.
+		redacted := PatchChannel{Channel: *origin}
+		redacted.OtherSettings = ""
+		redacted.SetOtherSettings(dto.ChannelOtherSettings{
+			BalanceQuery: &dto.ChannelBalanceQuery{Mode: dto.BalanceQueryModeUserAPI, UserId: "1"},
+			AdvancedCustom: &dto.AdvancedCustomConfig{Routes: []dto.AdvancedCustomRoute{
+				{IncomingPath: "/v1/chat", UpstreamPath: "/v1/chat"},
+			}},
+		})
+		redacted.RestoreBalanceQueryAccessToken(origin)
+		assert.False(t, channelHasSensitiveChanges(&redacted, origin, map[string]any{"settings": redacted.OtherSettings}))
+
+		// Replacing the access token is a credential change and stays
+		// sensitive, like the channel key; the restore is a no-op because the
+		// incoming token is non-empty.
+		replaced := PatchChannel{Channel: *origin}
+		replaced.OtherSettings = ""
+		replaced.SetOtherSettings(dto.ChannelOtherSettings{
+			BalanceQuery: &dto.ChannelBalanceQuery{Mode: dto.BalanceQueryModeUserAPI, AccessToken: "pat-rotated", UserId: "1"},
+			AdvancedCustom: &dto.AdvancedCustomConfig{Routes: []dto.AdvancedCustomRoute{
+				{IncomingPath: "/v1/chat", UpstreamPath: "/v1/chat"},
+			}},
+		})
+		replaced.RestoreBalanceQueryAccessToken(origin)
+		assert.True(t, channelHasSensitiveChanges(&replaced, origin, map[string]any{"settings": replaced.OtherSettings}))
+
+		// But changing advanced_custom routes (or any non-balance-query
+		// settings field) still requires ChannelSensitiveWrite.
+		rerouted := PatchChannel{Channel: *origin}
+		rerouted.OtherSettings = ""
+		rerouted.SetOtherSettings(dto.ChannelOtherSettings{
+			BalanceQuery: &dto.ChannelBalanceQuery{Mode: dto.BalanceQueryModeUserAPI, UserId: "1"},
+			AdvancedCustom: &dto.AdvancedCustomConfig{Routes: []dto.AdvancedCustomRoute{
+				{IncomingPath: "/v1/chat", UpstreamPath: "/exfiltrate"},
+			}},
+		})
+		rerouted.RestoreBalanceQueryAccessToken(origin)
+		assert.True(t, channelHasSensitiveChanges(&rerouted, origin, map[string]any{"settings": rerouted.OtherSettings}))
+	})
+
 	t.Run("omitted sensitive fields do not use zero values", func(t *testing.T) {
 		updated := PatchChannel{}
 		updated.Id = origin.Id
@@ -94,6 +146,68 @@ func TestChannelHasSensitiveChanges(t *testing.T) {
 			"response_time": updated.ResponseTime,
 		}))
 	})
+}
+
+func TestChannelHasSensitiveChangesWhenTopLevelAliasesChangeEffectiveSettings(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		typeID   int
+		origin   string
+		incoming string
+	}{
+		{
+			name:     "service tier aliases are reordered",
+			typeID:   constant.ChannelTypeNewAPI,
+			origin:   `{"allow_service_tier":false,"ALLOW_SERVICE_TIER":true}`,
+			incoming: `{"ALLOW_SERVICE_TIER":true,"allow_service_tier":false}`,
+		},
+		{
+			name:     "Unicode service tier aliases are reordered",
+			typeID:   constant.ChannelTypeNewAPI,
+			origin:   `{"allow_service_tier":false,"allow_\u017fervice_tier":true}`,
+			incoming: `{"allow_\u017fervice_tier":true,"allow_service_tier":false}`,
+		},
+		{
+			name:     "route aliases change the upstream host",
+			typeID:   constant.ChannelTypeAdvancedCustom,
+			origin:   `{"advanced_custom":{"advanced_routes":[{"incoming_path":"/v1/chat/completions","upstream_path":"https://attacker.example/collect"}]},"Advanced_Custom":{"advanced_routes":[{"incoming_path":"/v1/chat/completions","upstream_path":"/v1/chat/completions"}]}}`,
+			incoming: `{"Advanced_Custom":{"advanced_routes":[{"incoming_path":"/v1/chat/completions","upstream_path":"/v1/chat/completions"}]},"advanced_custom":{"advanced_routes":[{"incoming_path":"/v1/chat/completions","upstream_path":"https://attacker.example/collect"}]}}`,
+		},
+		{
+			name:     "an earlier repeated route object changes the upstream host",
+			typeID:   constant.ChannelTypeAdvancedCustom,
+			origin:   `{"advanced_custom":{"advanced_routes":[{"incoming_path":"/v1/chat/completions","upstream_path":"/v1/chat/completions"}]},"advanced_custom":{}}`,
+			incoming: `{"advanced_custom":{"advanced_routes":[{"incoming_path":"/v1/chat/completions","upstream_path":"https://attacker.example/collect"}]},"advanced_custom":{}}`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			origin := model.Channel{Type: test.typeID, OtherSettings: test.origin}
+			incoming := PatchChannel{Channel: model.Channel{Type: test.typeID, OtherSettings: test.incoming}}
+			require.NoError(t, origin.ValidateSettings())
+			require.NoError(t, incoming.ValidateSettings())
+			require.NotEqual(t, origin.GetOtherSettings(), incoming.GetOtherSettings())
+
+			assert.True(t, channelHasSensitiveChanges(&incoming, &origin, map[string]any{"settings": incoming.OtherSettings}))
+		})
+	}
+}
+
+func TestChannelHasSensitiveChangesAllowsUnchangedAliasesAfterTokenRedaction(t *testing.T) {
+	for _, settings := range []string{
+		`{"allow_service_tier":false,"ALLOW_SERVICE_TIER":true,"balance_query":{"access_token":"pat-test","mode":"user_api","user_id":"1"}}`,
+		`{"\u0061llow_service_tier":false,"ALLOW_SERVICE_TIER":true,"balance_query":{"access_token":"pat-test","mode":"user_api","user_id":"1"}}`,
+	} {
+		t.Run(settings, func(t *testing.T) {
+			origin := model.Channel{Type: constant.ChannelTypeNewAPI, OtherSettings: settings}
+			incoming := PatchChannel{Channel: origin}
+			incoming.RedactBalanceQueryAccessToken()
+			incoming.RestoreBalanceQueryAccessToken(&origin)
+			require.NoError(t, incoming.ValidateSettings())
+			require.Equal(t, origin.GetOtherSettings(), incoming.GetOtherSettings())
+
+			assert.False(t, channelHasSensitiveChanges(&incoming, &origin, map[string]any{"settings": incoming.OtherSettings}))
+		})
+	}
 }
 
 func TestClearChannelReadOnlyFields(t *testing.T) {

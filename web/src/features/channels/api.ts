@@ -306,7 +306,19 @@ export async function deleteDisabledChannels(): Promise<{
 export async function getChannelKey(
   id: number,
   proofToken?: string
-): Promise<{ success: boolean; message?: string; data?: { key: string } }> {
+): Promise<{
+  success: boolean
+  message?: string
+  data?: {
+    key: string
+    balance_query_access_token?: string
+    balance_query_request?: {
+      url: string
+      headers?: Record<string, string> | null
+      body: string
+    }
+  }
+}> {
   const res = await api.post(
     `/api/channel/${id}/key`,
     undefined,

@@ -109,6 +109,10 @@ export function BalanceQueryDialog(props: BalanceQueryDialogProps) {
           ...currentRow,
           balance: newBalance,
           balance_updated_time: now,
+          channel_info: {
+            ...currentRow.channel_info,
+            balance_query_last_failed_time: 0,
+          },
         })
 
         // Invalidate queries to refresh the table
@@ -119,11 +123,16 @@ export function BalanceQueryDialog(props: BalanceQueryDialogProps) {
       } else if (response.success && response.raw_response !== undefined) {
         setRawResponse(response.raw_response)
       } else {
-        toast.error(response.message || t('Failed to query balance'))
+        toast.error(
+          describeBalanceQueryError(response.message || '') ||
+            t('Failed to query balance')
+        )
       }
     } catch (error: unknown) {
       toast.error(
-        error instanceof Error ? error.message : t('Failed to query balance')
+        describeBalanceQueryError(
+          error instanceof Error ? error.message : t('Failed to query balance')
+        )
       )
     } finally {
       setIsQuerying(false)
@@ -148,6 +157,24 @@ export function BalanceQueryDialog(props: BalanceQueryDialogProps) {
   const formatDate = (timestamp: number) => {
     if (!timestamp) return 'Never'
     return formatTimestampToDate(timestamp)
+  }
+
+  // The backend prefixes New API self-query (user_api/custom) refresh
+  // failures with "<mode> balance query failed: "; show a mode-aware message
+  // instead of the raw expr/transport error text. The prefix is matched
+  // case-sensitively because the backend emits the dto mode verbatim.
+  const describeBalanceQueryError = (message: string): string => {
+    for (const mode of ['user_api', 'custom'] as const) {
+      const prefix = `${mode} balance query failed: `
+      if (message.startsWith(prefix)) {
+        const detail = message.slice(prefix.length)
+        return t('{{mode}} balance query failed: {{detail}}', {
+          mode: mode === 'user_api' ? 'New API /api/user/self' : t('Custom'),
+          detail,
+        })
+      }
+    }
+    return message
   }
 
   if (isCodex) {
@@ -227,6 +254,21 @@ export function BalanceQueryDialog(props: BalanceQueryDialogProps) {
                   balanceUpdatedTime ?? currentRow.balance_updated_time
                 )}
               </div>
+              {Boolean(
+                currentRow.channel_info?.balance_query_last_failed_time
+              ) && (
+                <div className='text-destructive mt-2 text-xs'>
+                  {t(
+                    'Automatic balance refreshes have been failing since {{time}}; the balance above may be stale.',
+                    {
+                      time: formatDate(
+                        currentRow.channel_info
+                          ?.balance_query_last_failed_time ?? 0
+                      ),
+                    }
+                  )}
+                </div>
+              )}
             </div>
           </>
         )}

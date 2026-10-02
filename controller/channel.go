@@ -70,6 +70,10 @@ func clearChannelInfo(channel *model.Channel) {
 		channel.ChannelInfo.MultiKeyDisabledReason = nil
 		channel.ChannelInfo.MultiKeyDisabledTime = nil
 	}
+	// The balance-query access token is an upstream user-level credential;
+	// like the channel key it must not travel with regular channel
+	// responses. Only the secure key-view endpoint may reveal it.
+	channel.RedactBalanceQueryAccessToken()
 }
 
 func applyChannelStatusFilter(query *gorm.DB, statusFilter int) *gorm.DB {
@@ -444,13 +448,24 @@ func GetChannelKey(c *gin.Context) {
 		"name": channel.Name,
 	})
 
-	// 返回渠道密钥
+	// 返回渠道密钥；附带余额查询访问令牌（同为上游凭证，也只在此安全通道返回）
+	data := map[string]interface{}{
+		"key": channel.Key,
+	}
+	if balanceQuery := channel.GetOtherSettings().BalanceQuery; balanceQuery != nil {
+		if strings.TrimSpace(balanceQuery.AccessToken) != "" {
+			data["balance_query_access_token"] = balanceQuery.AccessToken
+		}
+		if balanceQuery.NormalizedMode() == dto.BalanceQueryModeCustom {
+			data["balance_query_request"] = gin.H{
+				"url": balanceQuery.URL, "headers": balanceQuery.Headers, "body": balanceQuery.Body,
+			}
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "获取成功",
-		"data": map[string]interface{}{
-			"key": channel.Key,
-		},
+		"data":    data,
 	})
 }
 
@@ -998,14 +1013,6 @@ func UpdateChannel(c *gin.Context) {
 		return
 	}
 
-	// 使用统一的校验函数
-	if err := validateChannel(&channel.Channel, false); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
-		return
-	}
 	// Preserve existing ChannelInfo to ensure multi-key channels keep correct state even if the client does not send ChannelInfo in the request.
 	originChannel, err := model.GetChannelById(channel.Id, true)
 	if err != nil {
@@ -1014,6 +1021,45 @@ func UpdateChannel(c *gin.Context) {
 			"message": err.Error(),
 		})
 		return
+	}
+	// Snapshot the raw incoming settings BEFORE the restore below: the write
+	// path re-merges the balance-query token against a row-locked re-read of
+	// the stored row, and that merge must restart from the client-sent value.
+	// Snapshotting the restored copy instead would already carry the (possibly
+	// stale) origin token and turn the locked re-merge into a no-op.
+	incomingOtherSettings := channel.OtherSettings
+	// Balance-query responses are redacted, so an update that keeps user_api
+	// mode but omits the access token means "keep the stored token" (same
+	// semantics as an empty channel key). Merge it back before validation.
+	channel.RestoreBalanceQueryAccessToken(originChannel)
+	// Validate the effective channel without writing omitted fields from the
+	// origin snapshot back to the database.
+	validationChannel := channel.Channel
+	if _, provided := requestData["type"]; !provided {
+		validationChannel.Type = originChannel.Type
+	}
+	if _, provided := requestData["base_url"]; !provided {
+		validationChannel.BaseURL = originChannel.BaseURL
+	}
+	if _, provided := requestData["setting"]; !provided {
+		validationChannel.Setting = originChannel.Setting
+	}
+	if _, provided := requestData["settings"]; !provided {
+		validationChannel.OtherSettings = originChannel.OtherSettings
+	}
+	if _, provided := requestData["other"]; !provided {
+		validationChannel.Other = originChannel.Other
+	}
+	// 使用统一的校验函数
+	if err := validateChannel(&validationChannel, false); err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+	if _, provided := requestData["settings"]; provided {
+		channel.OtherSettings = validationChannel.OtherSettings
 	}
 	originProxy := originChannel.GetSetting().Proxy
 	proxyChanged := false
@@ -1117,7 +1163,8 @@ func UpdateChannel(c *gin.Context) {
 			// 覆盖模式：直接使用新密钥（默认行为，不需要特殊处理）
 		}
 	}
-	err = channel.Update()
+	_, settingsProvided := requestData["settings"]
+	err = channel.UpdatePreservingBalanceQueryToken(incomingOtherSettings, settingsProvided)
 	if err != nil {
 		common.ApiError(c, err)
 		return

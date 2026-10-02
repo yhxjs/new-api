@@ -30,6 +30,10 @@ export const channelInfoSchema = z.object({
   multi_key_disabled_time: z.record(z.string(), z.number()).optional(),
   multi_key_polling_index: z.number().default(0),
   multi_key_mode: z.enum(['random', 'polling']).default('random'),
+  // Most recent failed New API self-query (user_api/custom) attempt; 0 or
+  // absent means the last refresh succeeded. balance/balance_updated_time
+  // keep the last successful value, so this is what flags a stale balance.
+  balance_query_last_failed_time: z.number().optional(),
 })
 
 export type ChannelInfo = z.infer<typeof channelInfoSchema>
@@ -109,6 +113,23 @@ export interface ChannelOtherSettings {
   upstream_model_update_last_check_time?: number
   upstream_model_update_last_detected_models?: string[]
   advanced_custom?: AdvancedCustomConfig
+  balance_query?: ChannelBalanceQueryConfig
+}
+
+export type ChannelBalanceQueryMode = 'subscription' | 'user_api' | 'custom'
+
+export interface ChannelBalanceQueryConfig {
+  mode?: ChannelBalanceQueryMode
+  // user_api mode
+  access_token?: string
+  user_id?: string
+  quota_per_unit?: number
+  // custom mode
+  method?: string
+  url?: string
+  headers?: Record<string, string>
+  body?: string
+  extract?: string
 }
 
 export interface AdvancedCustomConfig {

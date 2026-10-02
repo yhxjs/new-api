@@ -28,7 +28,19 @@ func channelHasSensitiveChanges(channel *PatchChannel, origin *model.Channel, re
 		return true
 	}
 	if _, ok := requestData["settings"]; ok && channel.OtherSettings != origin.OtherSettings {
-		return true
+		// The balance-query access token is the only tolerated difference: the
+		// backend redacts it from channel responses, so an unchanged edit
+		// round-trips as "no token" (or as whitespace reformatting around it)
+		// and must stay non-sensitive. RestoreBalanceQueryAccessToken in
+		// UpdateChannel runs before this check and re-merges the stored token
+		// into a redacted round-trip, so an unchanged edit already compares
+		// byte-equal here. Supplying a DIFFERENT token is a credential change
+		// (same policy as the channel key) and keeps requiring
+		// ChannelSensitiveWrite, as does any other settings difference
+		// (advanced_custom routes, credential types, unknown top-level fields).
+		if !channel.OtherSettingsEqualIgnoringBalanceQueryToken(origin) {
+			return true
+		}
 	}
 	if _, ok := requestData["key_mode"]; ok && channel.KeyMode != nil {
 		return true

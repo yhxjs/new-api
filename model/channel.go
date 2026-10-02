@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/types"
 
 	"github.com/samber/lo"
+	"github.com/tidwall/gjson"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -67,6 +69,12 @@ type ChannelInfo struct {
 	MultiKeyDisabledTime   map[int]int64         `json:"multi_key_disabled_time,omitempty"`   // key禁用时间列表，key index -> time
 	MultiKeyPollingIndex   int                   `json:"multi_key_polling_index"`             // 多Key模式下轮询的key索引
 	MultiKeyMode           constant.MultiKeyMode `json:"multi_key_mode"`
+	// BalanceQueryLastFailedTime records the most recent failed self-query
+	// (user_api/custom) attempt on a New API channel. Balance and
+	// BalanceUpdatedTime keep the last SUCCESSFUL value, so this timestamp
+	// is what lets the dashboard distinguish a fresh balance from a stale
+	// one whose refreshes have been failing.
+	BalanceQueryLastFailedTime int64 `json:"balance_query_last_failed_time,omitempty"`
 }
 
 type ChannelSortOptions struct {
@@ -554,6 +562,19 @@ func (channel *Channel) Insert() error {
 }
 
 func (channel *Channel) Update() error {
+	if err := channel.update(DB); err != nil {
+		return err
+	}
+	return channel.UpdateAbilities(nil)
+}
+
+// update performs the multi-key size fixup, the row update, and the re-read on
+// the given database handle so the write can join a caller's transaction. The
+// re-read is intentional: it refreshes the caller's in-memory channel from the
+// persisted row (including the freshly merged settings) before the transaction
+// commits, so callers reading the channel after UpdatePreservingBalanceQueryToken
+// see the committed values rather than the request-time snapshot.
+func (channel *Channel) update(db *gorm.DB) error {
 	// If this is a multi-key channel, recalculate MultiKeySize based on the current key list to avoid inconsistency after editing keys
 	if channel.ChannelInfo.IsMultiKey {
 		var keyStr string
@@ -561,9 +582,11 @@ func (channel *Channel) Update() error {
 			keyStr = channel.Key
 		} else {
 			// If key is not provided, read the existing key from the database
-			if existing, err := GetChannelById(channel.Id, true); err == nil {
-				keyStr = existing.Key
+			var existing Channel
+			if err := db.Select("key").First(&existing, "id = ?", channel.Id).Error; err != nil {
+				return err
 			}
+			keyStr = existing.Key
 		}
 		// Parse the key list (supports newline separation or JSON array)
 		keys := []string{}
@@ -593,13 +616,148 @@ func (channel *Channel) Update() error {
 		}
 	}
 	var err error
-	err = DB.Model(channel).Updates(channel).Error
+	err = db.Model(channel).Updates(channel).Error
 	if err != nil {
 		return err
 	}
-	DB.Model(channel).First(channel, "id = ?", channel.Id)
-	err = channel.UpdateAbilities(nil)
-	return err
+	db.Model(channel).First(channel, "id = ?", channel.Id)
+	return nil
+}
+
+// UpdatePreservingBalanceQueryToken updates the channel like Update, and
+// re-applies the "empty token keeps the stored token" merge inside the same
+// transaction as the write. The controller validated the request against an
+// origin snapshot read without a lock; if a concurrent update rotated the
+// balance-query access token in the meantime, merging from that snapshot and
+// writing would silently revert the rotation. The merge therefore restarts
+// from the raw incoming settings (captured before the controller restored the
+// origin token for validation) and re-reads the stored token under
+// SELECT ... FOR UPDATE (no-op on SQLite, whose single-writer model
+// serializes writers anyway), so the committed row always keeps whichever
+// balance-query token is current when this update lands.
+//
+// Scope note: the row lock serializes only the balance-query token merge.
+// Every other field (name, models, base_url, ...) is still written from the
+// controller's lock-free origin snapshot, so two concurrent edits to
+// non-settings fields remain last-writer-wins — the same behavior as Update.
+// Settings are re-validated under the same lock: the merge may have pulled in
+// a concurrently rotated token (or none, if a concurrent update cleared it),
+// and non-NewAPI rows must not retain a stale balance_query block the
+// controller-side validation already stripped from its restored copy.
+func (channel *Channel) UpdatePreservingBalanceQueryToken(incomingOtherSettings string, settingsProvided bool) error {
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		stored := &Channel{}
+		if err := lockForUpdate(tx).First(stored, "id = ?", channel.Id).Error; err != nil {
+			return err
+		}
+		settingsChannel := *channel
+		if settingsChannel.Type == 0 {
+			settingsChannel.Type = stored.Type
+		}
+		if settingsChannel.BaseURL == nil {
+			settingsChannel.BaseURL = stored.BaseURL
+		}
+		settingsChannel.OtherSettings = stored.OtherSettings
+		if settingsProvided {
+			settingsChannel.OtherSettings = incomingOtherSettings
+		}
+		// Balance query settings only exist on New API channels; for every
+		// other type the merge must not re-add the credential, and the
+		// re-validation below strips any stale block from the raw snapshot.
+		if settingsChannel.Type == constant.ChannelTypeNewAPI {
+			settingsChannel.RestoreBalanceQueryAccessToken(stored)
+		}
+		if err := settingsChannel.ValidateSettings(); err != nil {
+			return err
+		}
+		channel.OtherSettings = settingsChannel.OtherSettings
+		// Editing must not overwrite a failure recorded or cleared after the
+		// controller read its ChannelInfo snapshot.
+		channel.ChannelInfo.BalanceQueryLastFailedTime = stored.ChannelInfo.BalanceQueryLastFailedTime
+		clearSettings := settingsProvided && settingsChannel.OtherSettings == ""
+		if err := channel.update(tx); err != nil {
+			return err
+		}
+		if clearSettings {
+			if err := tx.Model(&Channel{}).Where("id = ?", channel.Id).Update("settings", "").Error; err != nil {
+				return err
+			}
+			channel.OtherSettings = ""
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	return channel.UpdateAbilities(nil)
+}
+
+// UpdateUpstreamModelSettings merges only the model-discovery fields into the
+// current settings row. Model discovery performs an upstream request before
+// persisting its result, so the caller's settings snapshot can be stale by
+// the time it writes. Keeping the merge inside a row-locked transaction
+// prevents unrelated credentials, including balance-query tokens, from being
+// reverted by that stale snapshot.
+func (channel *Channel) UpdateUpstreamModelSettings(settings dto.ChannelOtherSettings, updateModels bool) error {
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var stored Channel
+		if err := lockForUpdate(tx).Select("id", "settings", "models").First(&stored, "id = ?", channel.Id).Error; err != nil {
+			return err
+		}
+
+		currentSettings := map[string]json.RawMessage{}
+		if strings.TrimSpace(stored.OtherSettings) != "" {
+			if err := common.UnmarshalJsonStr(stored.OtherSettings, &currentSettings); err != nil {
+				return err
+			}
+		}
+		updatedSettingsBytes, err := common.Marshal(settings)
+		if err != nil {
+			return err
+		}
+		updatedSettings := map[string]json.RawMessage{}
+		if err := common.Unmarshal(updatedSettingsBytes, &updatedSettings); err != nil {
+			return err
+		}
+		modelUpdateFields := []string{
+			"upstream_model_update_check_enabled",
+			"upstream_model_update_auto_sync_enabled",
+			"upstream_model_update_last_check_time",
+			"upstream_model_update_last_detected_models",
+			"upstream_model_update_last_removed_models",
+			"upstream_model_update_ignored_models",
+		}
+		// Preserve all unrelated fields in source order, including duplicate
+		// objects and case aliases that the settings DTO merges in that order.
+		fields := []string{}
+		gjson.Parse(stored.OtherSettings).ForEach(func(name, value gjson.Result) bool {
+			if name.Type != gjson.String {
+				return true // A null settings object has no fields to preserve.
+			}
+			for _, key := range modelUpdateFields {
+				if strings.EqualFold(name.Str, key) {
+					return true
+				}
+			}
+			fields = append(fields, name.Raw+":"+value.Raw)
+			return true
+		})
+		for _, key := range modelUpdateFields {
+			if value, ok := updatedSettings[key]; ok {
+				fields = append(fields, `"`+key+`":`+string(value))
+			}
+		}
+		mergedSettings := "{" + strings.Join(fields, ",") + "}"
+		updates := map[string]any{"settings": mergedSettings}
+		if updateModels {
+			updates["models"] = channel.Models
+		}
+		if err := tx.Model(&Channel{}).Where("id = ?", channel.Id).Updates(updates).Error; err != nil {
+			return err
+		}
+		channel.OtherSettings = mergedSettings
+		return nil
+	})
 }
 
 func (channel *Channel) UpdateResponseTime(responseTime int64) {
@@ -622,6 +780,415 @@ func (channel *Channel) UpdateBalance(balance float64) {
 	}
 }
 
+// ClearBalanceQueryFailure preserves other channel-info fields by merging
+// against the current row rather than a potentially stale query snapshot.
+func (channel *Channel) ClearBalanceQueryFailure() error {
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var stored Channel
+		if err := lockForUpdate(tx).Select("id", "channel_info").First(&stored, "id = ?", channel.Id).Error; err != nil {
+			return err
+		}
+		if stored.ChannelInfo.BalanceQueryLastFailedTime == 0 {
+			return nil
+		}
+		stored.ChannelInfo.BalanceQueryLastFailedTime = 0
+		return tx.Model(&stored).Update("channel_info", stored.ChannelInfo).Error
+	})
+}
+
+// MarkBalanceQueryFailure updates only the current failure timestamp so an
+// automatic refresh cannot overwrite concurrent channel-info changes.
+func (channel *Channel) MarkBalanceQueryFailure(timestamp int64) error {
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var stored Channel
+		if err := lockForUpdate(tx).Select("id", "channel_info").First(&stored, "id = ?", channel.Id).Error; err != nil {
+			return err
+		}
+		stored.ChannelInfo.BalanceQueryLastFailedTime = timestamp
+		return tx.Model(&stored).Update("channel_info", stored.ChannelInfo).Error
+	})
+}
+
+// RedactBalanceQueryAccessToken clears the user_api access token and masks
+// custom request credentials in the channel's other settings. The edit is
+// done on the raw settings JSON
+// (not through the settings DTO) so keys unknown to the DTO survive the
+// redacted round-trip. Channel responses to ChannelRead admins must be
+// redacted; credentials stay readable only through the dedicated secure
+// key-view endpoint and inside the relay/balance code paths.
+//
+// Redaction never fails open: whenever the token cannot be removed
+// surgically (unparseable settings, unreadable balance_query object), the
+// affected part is dropped from the API copy instead of traveling to the
+// client with the token still inside.
+func (channel *Channel) RedactBalanceQueryAccessToken() {
+	if strings.TrimSpace(channel.OtherSettings) == "" {
+		return
+	}
+	settings := map[string]json.RawMessage{}
+	if err := common.UnmarshalJsonStr(channel.OtherSettings, &settings); err != nil {
+		// Unparseable settings cannot have the token removed surgically, so
+		// the API copy carries no settings at all.
+		common.SysError(fmt.Sprintf("redact balance query access token: channel %d has unparseable settings JSON", channel.Id))
+		channel.OtherSettings = ""
+		return
+	}
+	settingsChanged := false
+	fields := []string{}
+	// Preserve field order: the settings DTO accepts aliases and applies them
+	// in JSON order, so sorting duplicate aliases can change the active token.
+	gjson.Parse(channel.OtherSettings).ForEach(func(queryKey, value gjson.Result) bool {
+		raw := value.Raw
+		if strings.EqualFold(queryKey.Str, "balance_query") && value.Type != gjson.Null {
+			if value.Type != gjson.JSON || !value.IsObject() {
+				common.SysError(fmt.Sprintf("redact balance query access token: channel %d has unparseable balance_query JSON", channel.Id))
+				settingsChanged = true
+				return true
+			}
+			queryFields := []string{}
+			value.ForEach(func(tokenKey, access gjson.Result) bool {
+				if strings.EqualFold(tokenKey.Str, "access_token") &&
+					access.Type != gjson.Null && !(access.Type == gjson.String && access.Str == "") {
+					if access.Type != gjson.String {
+						common.SysError(fmt.Sprintf("redact balance query access token: channel %d has a non-string access_token", channel.Id))
+					}
+					settingsChanged = true
+					return true
+				}
+				name, _ := common.Marshal(tokenKey.Str)
+				queryFields = append(queryFields, string(name)+":"+access.Raw)
+				return true
+			})
+			raw = "{" + strings.Join(queryFields, ",") + "}"
+		}
+		name, _ := common.Marshal(queryKey.Str)
+		fields = append(fields, string(name)+":"+raw)
+		return true
+	})
+	if settingsChanged {
+		channel.OtherSettings = "{" + strings.Join(fields, ",") + "}"
+	}
+	if settings != nil {
+		channel.OtherSettings = balanceQueryRequestCredentials(channel.OtherSettings, nil)
+	}
+}
+
+// RestoreBalanceQueryAccessToken merges a possibly-redacted incoming balance
+// query config (from a channel update request) with the stored one: when the
+// new config keeps user_api mode but carries no access token, the stored
+// token is preserved, mirroring the empty-key-keeps-existing-key semantics.
+// Custom request markers are replaced with the corresponding stored values.
+// The merge edits the raw settings JSON in place so keys unknown to the
+// settings DTO survive the round-trip, like RedactBalanceQueryAccessToken.
+func (channel *Channel) RestoreBalanceQueryAccessToken(origin *Channel) {
+	// Parsing an unvalidated request must never invoke GetOtherSettings:
+	// that getter repairs malformed settings by saving the entire channel.
+	var incomingSettings, savedSettings dto.ChannelOtherSettings
+	if channel.OtherSettings != "" {
+		if err := common.UnmarshalJsonStr(channel.OtherSettings, &incomingSettings); err != nil {
+			return
+		}
+	}
+	incoming := incomingSettings.BalanceQuery
+	if incoming == nil {
+		return
+	}
+	if incoming.NormalizedMode() == dto.BalanceQueryModeCustom {
+		channel.OtherSettings = balanceQueryRequestCredentials(channel.OtherSettings, &origin.OtherSettings)
+		return
+	}
+	if incoming.NormalizedMode() != dto.BalanceQueryModeUserAPI {
+		return
+	}
+	if strings.TrimSpace(incoming.AccessToken) != "" {
+		return
+	}
+	if origin.OtherSettings != "" {
+		if err := common.UnmarshalJsonStr(origin.OtherSettings, &savedSettings); err != nil {
+			return
+		}
+	}
+	saved := savedSettings.BalanceQuery
+	if saved == nil || strings.TrimSpace(saved.AccessToken) == "" {
+		return
+	}
+	token, err := common.Marshal(saved.AccessToken)
+	if err != nil {
+		return
+	}
+	savedTokens := [][]string{}
+	savedQueryKeys := []string{}
+	gjson.Parse(origin.OtherSettings).ForEach(func(queryKey, value gjson.Result) bool {
+		if !strings.EqualFold(queryKey.Str, "balance_query") || !value.IsObject() {
+			return true
+		}
+		queryTokens := []string{}
+		value.ForEach(func(name, field gjson.Result) bool {
+			if strings.EqualFold(name.Str, "access_token") {
+				key, _ := common.Marshal(name.Str)
+				queryTokens = append(queryTokens, string(key)+":"+field.Raw)
+			}
+			return true
+		})
+		savedTokens = append(savedTokens, queryTokens)
+		savedQueryKeys = append(savedQueryKeys, queryKey.Str)
+		return true
+	})
+	incomingQueryKeys := []string{}
+	gjson.Parse(channel.OtherSettings).ForEach(func(queryKey, value gjson.Result) bool {
+		if strings.EqualFold(queryKey.Str, "balance_query") && value.IsObject() {
+			incomingQueryKeys = append(incomingQueryKeys, queryKey.Str)
+		}
+		return true
+	})
+	preserveAliases := len(savedQueryKeys) == len(incomingQueryKeys)
+	if preserveAliases {
+		for index, name := range savedQueryKeys {
+			if name != incomingQueryKeys[index] {
+				preserveAliases = false
+				break
+			}
+		}
+	}
+	queryIndex := 0
+	fields := []string{}
+	gjson.Parse(channel.OtherSettings).ForEach(func(queryKey, value gjson.Result) bool {
+		raw := value.Raw
+		if strings.EqualFold(queryKey.Str, "balance_query") && value.IsObject() {
+			queryFields := []string{}
+			value.ForEach(func(name, field gjson.Result) bool {
+				if !strings.EqualFold(name.Str, "access_token") {
+					key, _ := common.Marshal(name.Str)
+					queryFields = append(queryFields, string(key)+":"+field.Raw)
+				}
+				return true
+			})
+			if preserveAliases {
+				queryFields = append(queryFields, savedTokens[queryIndex]...)
+			} else {
+				// Use one canonical token field for a new duplicate object. The
+				// DTO merges duplicate objects in source order, so every object
+				// must remain valid after a redacted round-trip.
+				queryFields = append(queryFields, `"access_token":`+string(token))
+			}
+			queryIndex++
+			raw = "{" + strings.Join(queryFields, ",") + "}"
+		}
+		name, _ := common.Marshal(queryKey.Str)
+		fields = append(fields, string(name)+":"+raw)
+		return true
+	})
+	channel.OtherSettings = "{" + strings.Join(fields, ",") + "}"
+}
+
+// canonicalizeOtherSettingsForCompare normalizes the channel's other settings
+// for the sensitive-changes comparison. It returns the canonical JSON, a
+// credential fingerprint (including every token alias in JSON order),
+// and whether the settings were parseable at all. The canonical form keeps the
+// raw settings JSON (not the settings DTO) so keys unknown to the DTO stay
+// visible to the sensitive-changes check: an edit that touches them still
+// requires ChannelSensitiveWrite. Values keep byte fidelity — raw JSON, never
+// round-tripped through float64 — so two different numbers cannot collapse
+// into an equal comparison; only the balance_query object is re-marshaled
+// (key order normalized) so the token can be excised. An unreadable
+// balance_query object carries no comparable credential and is dropped the
+// same way RedactBalanceQueryAccessToken drops it from responses. A
+// balance_query reduced to the bare subscription default (nothing beyond the
+// mode) counts as absent, so a frontend-injected {"mode":"subscription"}
+// equals a legacy channel that never stored balance query settings.
+//
+// Invariant: the canonical form never moves or drops keys other than
+// balance_query, so a non-empty settings map always canonicalizes to a
+// non-empty JSON object.
+func (channel *Channel) canonicalizeOtherSettingsForCompare() (string, string, bool) {
+	trimmed := strings.TrimSpace(channel.OtherSettings)
+	if trimmed == "" {
+		trimmed = "{}"
+	}
+	var settings map[string]json.RawMessage
+	if err := common.UnmarshalJsonStr(trimmed, &settings); err != nil {
+		return "", "", false
+	}
+	if settings == nil {
+		settings = map[string]json.RawMessage{}
+	}
+	token := ""
+	credentials := []string{}
+	orderedBalance := []string{}
+	orderedOther := []string{}
+	seenOtherFields := map[string]bool{}
+	hasDuplicateOtherField := false
+	hasDuplicateBalanceField := false
+	gjson.Parse(trimmed).ForEach(func(queryKey, value gjson.Result) bool {
+		if !strings.EqualFold(queryKey.Str, "balance_query") {
+			// JSON's ASCII field matching also folds the Unicode long s.
+			fieldName := strings.ReplaceAll(strings.ToLower(queryKey.Str), "ſ", "s")
+			if seenOtherFields[fieldName] {
+				hasDuplicateOtherField = true
+			}
+			seenOtherFields[fieldName] = true
+			key, _ := common.Marshal(queryKey.Str)
+			orderedOther = append(orderedOther, string(key)+":"+value.Raw)
+			return true
+		}
+		if value.IsObject() {
+			queryFields := []string{}
+			seenFields := map[string]bool{}
+			value.ForEach(func(tokenKey, access gjson.Result) bool {
+				if strings.EqualFold(tokenKey.Str, "access_token") {
+					var tokenString string
+					if err := common.UnmarshalJsonStr(access.Raw, &tokenString); err != nil {
+						tokenString = access.Raw
+					}
+					token = tokenString
+					credentials = append(credentials, queryKey.Str+"."+tokenKey.Str+":"+tokenString)
+					return true
+				}
+				fieldName := strings.ToLower(tokenKey.Str)
+				for _, knownField := range []string{"mode", "user_id", "quota_per_unit", "method", "url", "headers", "body", "extract"} {
+					if strings.EqualFold(tokenKey.Str, knownField) {
+						fieldName = knownField
+						break
+					}
+				}
+				if seenFields[fieldName] {
+					hasDuplicateBalanceField = true
+				}
+				seenFields[fieldName] = true
+				key, _ := common.Marshal(tokenKey.Str)
+				queryFields = append(queryFields, string(key)+":"+access.Raw)
+				return true
+			})
+			orderedBalance = append(orderedBalance, "{"+strings.Join(queryFields, ",")+"}")
+		} else {
+			orderedBalance = append(orderedBalance, value.Raw)
+		}
+		return true
+	})
+	if len(credentials) > 1 {
+		hasDuplicateBalanceField = true
+		encoded, err := common.Marshal(credentials)
+		if err != nil {
+			return "", "", false
+		}
+		token = string(encoded)
+	}
+	if len(orderedBalance) > 1 {
+		hasDuplicateBalanceField = true
+	}
+	if hasDuplicateOtherField {
+		// Top-level aliases outside balance_query are also merged in source
+		// order. Sorting them could hide a change to the effective relay route
+		// or passthrough settings from the sensitive-write permission check.
+		return "ordered-other:{" + strings.Join(orderedOther, ",") + "}:[" + strings.Join(orderedBalance, ",") + "]", token, true
+	}
+	if hasDuplicateBalanceField {
+		// Preserve duplicate objects and case-variant field order in the
+		// comparison. encoding/json merges these fields into one DTO value,
+		// so a map-based canonical form could authorize a request that changes
+		// the effective balance-query request.
+		other := map[string]json.RawMessage{}
+		for queryKey, raw := range settings {
+			if !strings.EqualFold(queryKey, "balance_query") {
+				other[queryKey] = raw
+			}
+		}
+		otherJSON, err := common.Marshal(other)
+		if err != nil {
+			return "", "", false
+		}
+		return "ordered:" + "[" + strings.Join(orderedBalance, ",") + "]:" + string(otherJSON), token, true
+	}
+	for queryKey, balanceQueryRaw := range settings {
+		if !strings.EqualFold(queryKey, "balance_query") {
+			continue
+		}
+		balanceQuery := map[string]json.RawMessage{}
+		if err := common.Unmarshal(balanceQueryRaw, &balanceQuery); err != nil {
+			delete(settings, queryKey)
+		} else {
+			for tokenKey := range balanceQuery {
+				if strings.EqualFold(tokenKey, "access_token") {
+					delete(balanceQuery, tokenKey)
+				}
+			}
+			reduced := len(balanceQuery) == 0
+			if !reduced && len(balanceQuery) == 1 {
+				var mode string
+				if err := common.Unmarshal(balanceQuery["mode"], &mode); err == nil &&
+					(mode == "" || mode == dto.BalanceQueryModeSubscription) {
+					reduced = true
+				}
+			}
+			if reduced {
+				delete(settings, queryKey)
+			} else if canonicalQuery, err := common.Marshal(balanceQuery); err == nil {
+				settings[queryKey] = canonicalQuery
+			} else {
+				return "", "", false
+			}
+		}
+	}
+	canonicalJSON, err := common.Marshal(settings)
+	if err != nil {
+		return "", "", false
+	}
+	return string(canonicalJSON), token, true
+}
+
+// OtherSettingsEqualIgnoringBalanceQueryToken reports whether the channel's
+// other settings equal origin's ignoring the user_api balance-query access
+// token, but only while that token is itself unchanged: the sole caller
+// (UpdateChannel) runs RestoreBalanceQueryAccessToken first, so a redacted
+// round-trip carries the stored token and compares equal, while a supplied
+// different token is a credential change (like the channel key) and reports
+// unequal so it keeps requiring ChannelSensitiveWrite.
+//
+// Fail-closed semantics: unparseable settings on either side compare unequal
+// (treated as a change), preserving the legacy byte-inequality behavior for
+// data we cannot reason about.
+func (channel *Channel) OtherSettingsEqualIgnoringBalanceQueryToken(origin *Channel) bool {
+	left, leftToken, leftOK := channel.canonicalizeOtherSettingsForCompare()
+	right, rightToken, rightOK := origin.canonicalizeOtherSettingsForCompare()
+	if !leftOK || !rightOK {
+		return false
+	}
+	if leftToken != rightToken {
+		return false
+	}
+	return left == right
+}
+
+// StripBalanceQuerySettings removes the balance_query block from the channel's
+// other settings in place. Balance query settings only apply to New API
+// channels, so a stale block (e.g. left behind by a channel type change) is
+// stripped on save instead of retaining an unused upstream credential. The
+// edit is done on the raw settings JSON so keys unknown to the settings DTO
+// survive byte-identically; an unparseable settings string is left untouched.
+func (channel *Channel) StripBalanceQuerySettings() {
+	if strings.TrimSpace(channel.OtherSettings) == "" {
+		return
+	}
+	settings := map[string]json.RawMessage{}
+	if err := common.UnmarshalJsonStr(channel.OtherSettings, &settings); err != nil || settings == nil {
+		return
+	}
+	changed := false
+	fields := []string{}
+	gjson.Parse(channel.OtherSettings).ForEach(func(queryKey, value gjson.Result) bool {
+		if strings.EqualFold(queryKey.Str, "balance_query") {
+			changed = true
+			return true
+		}
+		fields = append(fields, queryKey.Raw+":"+value.Raw)
+		return true
+	})
+	if !changed {
+		return
+	}
+	channel.OtherSettings = "{" + strings.Join(fields, ",") + "}"
+}
+
 func (channel *Channel) Delete() error {
 	var err error
 	err = DB.Delete(channel).Error
@@ -636,6 +1203,21 @@ var channelStatusLock sync.Mutex
 
 // channelPollingLocks stores locks for each channel.id to ensure thread-safe polling
 var channelPollingLocks sync.Map
+
+// balanceQueryExtractCompileEnvPrototype is the compile-time type-checking
+// environment ValidateSettings uses for the New API custom-mode balance
+// extract expression. It must mirror the runtime environment built by
+// controller.balanceExprEnv: same names, compatible signatures — an
+// expression that compiles against this prototype compiles at query time.
+var balanceQueryExtractCompileEnvPrototype = map[string]interface{}{
+	"response": map[string]interface{}{},
+	"json":     func(string) interface{} { return nil },
+	"max":      math.Max,
+	"min":      math.Min,
+	"abs":      math.Abs,
+	"ceil":     math.Ceil,
+	"floor":    math.Floor,
+}
 
 // GetChannelPollingLock returns or creates a mutex for the given channel ID
 func GetChannelPollingLock(channelId int) *sync.Mutex {
@@ -999,10 +1581,35 @@ func (channel *Channel) ValidateSettings() error {
 			return err
 		}
 	}
+	if channel.Type == constant.ChannelTypeNewAPI {
+		if err := channelOtherSettings.BalanceQuery.Validate(); err != nil {
+			return err
+		}
+		// Save-time and runtime compilation share the same restrictions so
+		// unsafe extract expressions cannot be stored or executed.
+		if channelOtherSettings.BalanceQuery != nil &&
+			channelOtherSettings.BalanceQuery.NormalizedMode() == dto.BalanceQueryModeCustom &&
+			strings.TrimSpace(channelOtherSettings.BalanceQuery.Extract) != "" {
+			if _, err := common.CompileBalanceQueryExtract(channelOtherSettings.BalanceQuery.Extract,
+				balanceQueryExtractCompileEnvPrototype); err != nil {
+				return fmt.Errorf("balance_query.extract is not a valid expression: %w", err)
+			}
+		}
+		if channelOtherSettings.BalanceQuery.UsesRelativeURL() &&
+			strings.TrimSpace(channel.GetBaseURL()) == "" {
+			return fmt.Errorf("channel base URL is required when the balance query URL is relative")
+		}
+	}
 	if channel.Type == constant.ChannelTypeAdvancedCustom && channelOtherSettings.UpstreamModelUpdateCheckEnabled {
 		if _, ok := channelOtherSettings.AdvancedCustom.ModelListRoute(); !ok {
 			return fmt.Errorf("advanced custom channels require a %s route when upstream model update checks are enabled", dto.AdvancedCustomModelListPath)
 		}
+	}
+	// Balance query settings only apply to New API channels; strip stale
+	// blocks (e.g. left behind by a channel type change) so an unused
+	// upstream credential is never retained on save.
+	if channel.Type != constant.ChannelTypeNewAPI {
+		channel.StripBalanceQuerySettings()
 	}
 	return nil
 }

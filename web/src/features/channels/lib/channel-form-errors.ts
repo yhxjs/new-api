@@ -18,7 +18,10 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import type { FieldPath } from 'react-hook-form'
 
-import type { ChannelFormValues } from './channel-form'
+import {
+  BALANCE_QUERY_FORM_FIELDS,
+  type ChannelFormValues,
+} from './channel-form'
 
 type ChannelFormErrorMap = Partial<
   Record<FieldPath<ChannelFormValues>, unknown>
@@ -54,6 +57,7 @@ const ADVANCED_SETTINGS_FIELDS = new Set<FieldPath<ChannelFormValues>>([
   'upstream_model_update_check_enabled',
   'upstream_model_update_auto_sync_enabled',
   'upstream_model_update_ignored_models',
+  ...BALANCE_QUERY_FORM_FIELDS,
 ])
 
 export function isAdvancedSettingsField(

@@ -301,6 +301,7 @@ func sanitizeFetchModelsError(err error, key string) error {
 		message = strings.ReplaceAll(message, key, "[REDACTED]")
 		message = strings.ReplaceAll(message, url.QueryEscape(key), "[REDACTED]")
 		message = strings.ReplaceAll(message, url.PathEscape(key), "[REDACTED]")
+		message = strings.ReplaceAll(message, strings.ReplaceAll(url.QueryEscape(key), "+", "%20"), "[REDACTED]")
 	}
 	return errors.New(message)
 }
@@ -323,6 +324,7 @@ func sanitizeAdvancedCustomRequestError(err error, key string, requestURL string
 			message = strings.ReplaceAll(message, secret, "[REDACTED]")
 			message = strings.ReplaceAll(message, url.QueryEscape(secret), "[REDACTED]")
 			message = strings.ReplaceAll(message, url.PathEscape(secret), "[REDACTED]")
+			message = strings.ReplaceAll(message, strings.ReplaceAll(url.QueryEscape(secret), "+", "%20"), "[REDACTED]")
 		}
 	}
 	if key != "" {
@@ -497,14 +499,7 @@ func fetchAdvancedCustomUpstreamModelIDs(channel *model.Channel, baseURL string)
 }
 
 func updateChannelUpstreamModelSettings(channel *model.Channel, settings dto.ChannelOtherSettings, updateModels bool) error {
-	channel.SetOtherSettings(settings)
-	updates := map[string]interface{}{
-		"settings": channel.OtherSettings,
-	}
-	if updateModels {
-		updates["models"] = channel.Models
-	}
-	return model.DB.Model(&model.Channel{}).Where("id = ?", channel.Id).Updates(updates).Error
+	return channel.UpdateUpstreamModelSettings(settings, updateModels)
 }
 
 func checkAndPersistChannelUpstreamModelUpdates(
@@ -892,6 +887,11 @@ func ApplyChannelUpstreamModelUpdates(c *gin.Context) {
 	recordManageAudit(c, "channel.upstream_apply", map[string]interface{}{
 		"id": channel.Id,
 	})
+	// The settings were already persisted above; redact only the response
+	// copy so the balance-query access token never leaves the server through
+	// this ChannelWrite endpoint (it stays readable only via the root-only
+	// key-view endpoint, like the channel key).
+	channel.RedactBalanceQueryAccessToken()
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",

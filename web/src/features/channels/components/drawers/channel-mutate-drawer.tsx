@@ -25,6 +25,7 @@ import {
   CheckCircle2,
   Circle,
   ClipboardPaste,
+  DollarSign,
   HelpCircle,
   KeyRound,
   Loader2,
@@ -139,6 +140,7 @@ import {
 } from '../../api'
 import {
   ADD_MODE_OPTIONS,
+  CHANNEL_TYPE_NEW_API,
   CLAUDE_FIELD_PASSTHROUGH_TYPES,
   CHANNEL_STATUS_LABELS,
   CHANNEL_TYPE_OPTIONS,
@@ -154,6 +156,7 @@ import {
 } from '../../constants'
 import { useChannelMutateForm } from '../../hooks/use-channel-mutate-form'
 import {
+  BALANCE_QUERY_FORM_FIELDS,
   CHANNEL_FORM_DEFAULT_VALUES,
   CHANNEL_TYPE_ADVANCED_CUSTOM,
   channelFormSchema,
@@ -240,6 +243,27 @@ const createEmptyModelMappingGuardrail = (): ModelMappingGuardrail => ({
 const formatModelNames = (models: string[]): string =>
   models.map((model) => `"${model}"`).join(', ')
 
+const BALANCE_QUERY_MODE_DESCRIPTIONS = {
+  subscription:
+    'Queries the OpenAI-compatible dashboard billing endpoints using the channel API key',
+  user_api:
+    'Queries the upstream New API user endpoint with an access token and user ID',
+  custom: 'Fully customizable request with an expression extractor',
+} as const
+
+function balanceQueryModeDescription(
+  mode: string | undefined,
+  t: (key: string) => string
+) {
+  if (mode === 'user_api') {
+    return t(BALANCE_QUERY_MODE_DESCRIPTIONS.user_api)
+  }
+  if (mode === 'custom') {
+    return t(BALANCE_QUERY_MODE_DESCRIPTIONS.custom)
+  }
+  return t(BALANCE_QUERY_MODE_DESCRIPTIONS.subscription)
+}
+
 const MODEL_MAPPING_PREVIEW_FALLBACK: Array<{
   source: string
   target: string
@@ -265,6 +289,7 @@ const ADVANCED_SETTINGS_SECTION_IDS = {
   extraSettings: 'channel-section-advanced-extra-settings',
   fieldPassthrough: 'channel-section-advanced-field-passthrough',
   upstreamModelDetection: 'channel-section-advanced-upstream-model-detection',
+  balanceQuery: 'channel-section-advanced-balance-query',
 } as const
 const ADVANCED_SETTINGS_CHILD_SECTION_IDS: string[] = Object.values(
   ADVANCED_SETTINGS_SECTION_IDS
@@ -306,6 +331,11 @@ const SENSITIVE_FORM_FIELDS = [
   'upstream_model_update_check_enabled',
   'upstream_model_update_auto_sync_enabled',
   'upstream_model_update_ignored_models',
+  // Every balance-query field including the access token requires
+  // ChannelSensitiveWrite: the backend merges the stored token back into an
+  // unchanged (redacted) round-trip, so only a genuinely new token — a
+  // credential change, like the channel key — is sensitive.
+  ...BALANCE_QUERY_FORM_FIELDS,
 ] satisfies (keyof ChannelFormValues)[]
 
 function readAdvancedSettingsPreference(): boolean {
@@ -632,6 +662,10 @@ export function ChannelMutateDrawer({
   const [fetchModelsDialogOpen, setFetchModelsDialogOpen] = useState(false)
   const [channelKey, setChannelKey] = useState<string | null>(null)
   const [isChannelKeyLoading, setIsChannelKeyLoading] = useState(false)
+  const channelKeySessionRef = useRef<{
+    channelId: number | null
+    open: boolean
+  } | null>(null)
   const [isCodexCredentialRefreshing, setIsCodexCredentialRefreshing] =
     useState(false)
   const initialModelsRef = useRef<string[]>([])
@@ -707,11 +741,15 @@ export function ChannelMutateDrawer({
   } = useSecureVerification()
 
   useEffect(() => {
+    channelKeySessionRef.current = { channelId, open }
+    setIsChannelKeyLoading(false)
     if (!open) {
       setChannelKey(null)
-      setIsChannelKeyLoading(false)
     } else if (channelId) {
       setChannelKey(null)
+    }
+    return () => {
+      channelKeySessionRef.current = null
     }
   }, [open, channelId])
 
@@ -724,6 +762,9 @@ export function ChannelMutateDrawer({
     resolver: zodResolver(channelFormSchema),
     defaultValues: CHANNEL_FORM_DEFAULT_VALUES,
   })
+  const balanceQueryAccessTokenDirty = Boolean(
+    form.formState.dirtyFields.balance_query_access_token
+  )
 
   // Watch form values for conditional rendering
   const multiKeyMode = form.watch('multi_key_mode')
@@ -778,6 +819,7 @@ export function ChannelMutateDrawer({
   const currentUpstreamModelUpdateIgnoredModels = form.watch(
     'upstream_model_update_ignored_models'
   )
+  const currentBalanceQueryMode = form.watch('balance_query_mode')
   const shouldPreviewUnsavedModels =
     !isEditing ||
     (currentType === CHANNEL_TYPE_ADVANCED_CUSTOM && canEditSensitive)
@@ -1068,13 +1110,19 @@ export function ChannelMutateDrawer({
     currentUpstreamModelUpdateAutoSyncEnabled ||
     currentUpstreamModelUpdateIgnoredModels?.trim()
   )
+  const balanceQueryConfigured = Boolean(
+    currentType === CHANNEL_TYPE_NEW_API &&
+    currentBalanceQueryMode &&
+    currentBalanceQueryMode !== 'subscription'
+  )
   const advancedConfigured = Boolean(
     routingStrategyConfigured ||
     internalNotesConfigured ||
     overrideRulesConfigured ||
     extraSettingsConfigured ||
     fieldPassthroughConfigured ||
-    upstreamModelDetectionConfigured
+    upstreamModelDetectionConfigured ||
+    balanceQueryConfigured
   )
   const advancedNavChildren: ChannelEditorNavChildItem[] = [
     {
@@ -1110,6 +1158,13 @@ export function ChannelMutateDrawer({
       id: ADVANCED_SETTINGS_SECTION_IDS.upstreamModelDetection,
       title: t('Upstream Model Detection Settings'),
       configured: upstreamModelDetectionConfigured,
+    })
+  }
+  if (currentType === CHANNEL_TYPE_NEW_API) {
+    advancedNavChildren.push({
+      id: ADVANCED_SETTINGS_SECTION_IDS.balanceQuery,
+      title: t('Balance Query'),
+      configured: balanceQueryConfigured,
     })
   }
   const editorNavItems: ChannelEditorNavItem[] = [
@@ -1373,7 +1428,14 @@ export function ChannelMutateDrawer({
   }
 
   const fetchChannelKey = useCallback(
-    async (proofToken?: string) => {
+    async (proofToken?: string, session = channelKeySessionRef.current) => {
+      if (
+        !session?.open ||
+        session.channelId !== channelId ||
+        session !== channelKeySessionRef.current
+      ) {
+        return
+      }
       if (!channelId) {
         throw new Error('Channel is not selected')
       }
@@ -1381,35 +1443,83 @@ export function ChannelMutateDrawer({
       setIsChannelKeyLoading(true)
       try {
         const res = await getChannelKey(channelId, proofToken)
+        if (session !== channelKeySessionRef.current) return res
         if (!res.success) {
           throw new Error(res.message || t('Failed to fetch channel key'))
         }
 
         const keyValue = res.data?.key ?? ''
         setChannelKey(keyValue)
+        // The balance-query access token travels on the same secure endpoint;
+        // fill it back into the form so a stored token stays viewable and
+        // editable after reveal. A field the user already touched (typed a
+        // new token for rotation, or deliberately cleared) is never
+        // overwritten, so a submit right after reveal cannot silently
+        // re-arm a token the user meant to change.
+        const accessToken = res.data?.balance_query_access_token
+        if (
+          accessToken &&
+          !form.formState.dirtyFields.balance_query_access_token &&
+          !form.getValues('balance_query_access_token')
+        ) {
+          // Backfilling the stored token is a read, not an edit; keep the
+          // form's dirty state untouched so it does not look unsaved.
+          form.setValue('balance_query_access_token', accessToken, {
+            shouldDirty: false,
+          })
+        }
+        const request = res.data?.balance_query_request
+        if (
+          request &&
+          form.getValues('type') === CHANNEL_TYPE_NEW_API &&
+          form.getValues('balance_query_mode') === 'custom'
+        ) {
+          const requestFields = {
+            balance_query_url: request.url,
+            balance_query_headers: request.headers
+              ? JSON.stringify(request.headers, null, 2)
+              : '',
+            balance_query_body: request.body,
+          }
+          for (const field of Object.keys(
+            requestFields
+          ) as (keyof typeof requestFields)[]) {
+            if (!form.getFieldState(field).isDirty) {
+              form.setValue(field, requestFields[field], { shouldDirty: false })
+            }
+          }
+        }
         toast.success(t('Channel key unlocked'))
         return res
       } finally {
-        setIsChannelKeyLoading(false)
+        if (session === channelKeySessionRef.current) {
+          setIsChannelKeyLoading(false)
+        }
       }
     },
-    [channelId, t]
+    // `form` is the RHF useForm return, whose identity is stable across
+    // renders; including it here does not churn this callback's identity.
+    [channelId, t, form]
   )
 
   const handleRevealKey = useCallback(async () => {
     if (!channelId) return
+    const session = channelKeySessionRef.current
 
     try {
-      await withVerification(fetchChannelKey, {
-        scope: 'channel.key.read',
-        preferredMethod: 'passkey',
-        title: t('Verify to view channel key'),
-        description: t(
-          'Use Passkey or 2FA to confirm your identity before revealing this channel key.'
-        ),
-      })
+      await withVerification(
+        (proofToken) => fetchChannelKey(proofToken, session),
+        {
+          scope: 'channel.key.read',
+          preferredMethod: 'passkey',
+          title: t('Verify to view channel key'),
+          description: t(
+            'Use Passkey or 2FA to confirm your identity before revealing this channel key.'
+          ),
+        }
+      )
     } catch (error) {
-      if (error instanceof Error) {
+      if (session === channelKeySessionRef.current && error instanceof Error) {
         toast.error(error.message)
       }
     }
@@ -1653,6 +1763,22 @@ export function ChannelMutateDrawer({
         return
       }
 
+      // Balance query access token follows the same semantics as the channel
+      // key: required when creating, empty keeps the stored token when editing.
+      if (
+        !isEditing &&
+        data.type === CHANNEL_TYPE_NEW_API &&
+        data.balance_query_mode === 'user_api' &&
+        !data.balance_query_access_token?.trim()
+      ) {
+        form.setError('balance_query_access_token', {
+          type: 'manual',
+          message: t('Access token is required for user API balance queries'),
+        })
+        setAdvancedSettingsOpen(true)
+        return
+      }
+
       if (sensitiveLocked) {
         const dirtyFields = form.formState.dirtyFields as Partial<
           Record<keyof ChannelFormValues, unknown>
@@ -1740,15 +1866,43 @@ export function ChannelMutateDrawer({
         }
       }
 
+      // A revealed token is a read; omit it unless the user edited the field
+      // so an unrelated save preserves any concurrent token rotation.
+      if (isEditing && !balanceQueryAccessTokenDirty) {
+        data.balance_query_access_token = undefined
+      }
+      if (
+        isEditing &&
+        channelData?.data?.type === CHANNEL_TYPE_NEW_API &&
+        data.type === CHANNEL_TYPE_NEW_API &&
+        data.balance_query_mode === 'custom'
+      ) {
+        const original = transformChannelToFormDefaults(channelData.data)
+        if (original.balance_query_mode === 'custom') {
+          // Revealing request values is a read. Keep their markers on an
+          // unrelated save so concurrent credential rotations survive.
+          for (const field of [
+            'balance_query_url',
+            'balance_query_headers',
+            'balance_query_body',
+          ] as const) {
+            if (!form.getFieldState(field).isDirty) {
+              data[field] = original[field]
+            }
+          }
+        }
+      }
       await channelMutation.mutateAsync(data)
     },
     [
       isEditing,
+      balanceQueryAccessTokenDirty,
       sensitiveLocked,
       form,
       confirmMissingModelMappings,
       confirmStatusCodeRisk,
       channelMutation,
+      channelData,
       t,
     ]
   )
@@ -1866,6 +2020,7 @@ export function ChannelMutateDrawer({
     (v: boolean) => {
       onOpenChange(v)
       if (!v) {
+        channelKeySessionRef.current = null
         form.reset(CHANNEL_FORM_DEFAULT_VALUES)
         advancedNavScrollPendingRef.current = false
         setActiveEditorSectionId(CHANNEL_EDITOR_SECTION_IDS.identity)
@@ -4858,6 +5013,371 @@ export function ChannelMutateDrawer({
                                   )}
                                 </div>
                               </div>
+                            </fieldset>
+                          </div>
+                        )}
+
+                        {currentType === CHANNEL_TYPE_NEW_API && (
+                          <div
+                            id={ADVANCED_SETTINGS_SECTION_IDS.balanceQuery}
+                            className={sideDrawerSectionClassName(
+                              configuredAdvancedSectionClassName(
+                                'scroll-mt-4',
+                                balanceQueryConfigured
+                              )
+                            )}
+                          >
+                            <CardHeading
+                              title={t('Balance Query')}
+                              icon={<DollarSign className='h-4 w-4' />}
+                              iconTone='success'
+                            />
+                            <fieldset
+                              disabled={sensitiveLocked}
+                              className='space-y-4 disabled:opacity-60'
+                            >
+                              <FormField
+                                control={form.control}
+                                name='balance_query_mode'
+                                render={({ field }) => (
+                                  <FormItem>
+                                    <FormLabel>
+                                      {t('Balance Query Mode')}
+                                    </FormLabel>
+                                    <Select
+                                      items={[
+                                        {
+                                          value: 'subscription',
+                                          label: t('Subscription'),
+                                        },
+                                        {
+                                          value: 'user_api',
+                                          label: 'New API /api/user/self',
+                                        },
+                                        {
+                                          value: 'custom',
+                                          label: t('Custom'),
+                                        },
+                                      ]}
+                                      value={field.value || 'subscription'}
+                                      onValueChange={field.onChange}
+                                    >
+                                      <FormControl>
+                                        <SelectTrigger>
+                                          <SelectValue />
+                                        </SelectTrigger>
+                                      </FormControl>
+                                      <SelectContent
+                                        alignItemWithTrigger={false}
+                                      >
+                                        <SelectGroup>
+                                          <SelectItem value='subscription'>
+                                            {t('Subscription')}
+                                          </SelectItem>
+                                          <SelectItem value='user_api'>
+                                            New API /api/user/self
+                                          </SelectItem>
+                                          <SelectItem value='custom'>
+                                            {t('Custom')}
+                                          </SelectItem>
+                                        </SelectGroup>
+                                      </SelectContent>
+                                    </Select>
+                                    <FormDescription>
+                                      {balanceQueryModeDescription(
+                                        field.value,
+                                        t
+                                      )}
+                                    </FormDescription>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
+                              />
+
+                              {currentBalanceQueryMode === 'user_api' && (
+                                <div className='grid gap-4 sm:grid-cols-2'>
+                                  <FormField
+                                    control={form.control}
+                                    name='balance_query_user_id'
+                                    render={({ field }) => (
+                                      <FormItem>
+                                        <FormLabel>{t('User ID')}</FormLabel>
+                                        <FormControl>
+                                          <Input placeholder='1' {...field} />
+                                        </FormControl>
+                                        <FormMessage />
+                                      </FormItem>
+                                    )}
+                                  />
+                                  <FormField
+                                    control={form.control}
+                                    name='balance_query_quota_per_unit'
+                                    render={({ field }) => (
+                                      <FormItem>
+                                        <FormLabel>
+                                          {t('Quota per USD')}
+                                        </FormLabel>
+                                        <FormControl>
+                                          <Input
+                                            type='number'
+                                            step='any'
+                                            placeholder='500000'
+                                            name={field.name}
+                                            onBlur={field.onBlur}
+                                            ref={field.ref}
+                                            value={field.value ?? ''}
+                                            onChange={(e) => {
+                                              if (e.target.value === '') {
+                                                field.onChange(undefined)
+                                                return
+                                              }
+                                              const parsed = Number(
+                                                e.target.value
+                                              )
+                                              // NaN (programmatic input
+                                              // only; type=number inputs
+                                              // yield '' for garbage) would
+                                              // fail zod with a generic
+                                              // message, so normalize it to
+                                              // the "unset" default instead.
+                                              field.onChange(
+                                                Number.isNaN(parsed)
+                                                  ? undefined
+                                                  : parsed
+                                              )
+                                            }}
+                                          />
+                                        </FormControl>
+                                        <FormDescription>
+                                          {t(
+                                            'Leave empty to use 500000 (the New API default)'
+                                          )}
+                                        </FormDescription>
+                                        <FormMessage />
+                                      </FormItem>
+                                    )}
+                                  />
+                                </div>
+                              )}
+                              {currentBalanceQueryMode === 'user_api' && (
+                                // The access token is gated by
+                                // ChannelSensitiveWrite like every other
+                                // balance-query field: the backend redacts it
+                                // from responses and merges the stored token
+                                // back on submit, so an unchanged edit sends
+                                // no token at all, while a changed token is a
+                                // credential change like the channel key.
+                                <FormField
+                                  control={form.control}
+                                  name='balance_query_access_token'
+                                  render={({ field }) => (
+                                    <FormItem>
+                                      <FormLabel>{t('Access Token')}</FormLabel>
+                                      <FormControl>
+                                        <Input
+                                          type='password'
+                                          autoComplete='off'
+                                          placeholder={t(
+                                            isEditing
+                                              ? 'Leave empty to keep existing access token'
+                                              : 'Access token generated on the upstream site'
+                                          )}
+                                          {...field}
+                                        />
+                                      </FormControl>
+                                      <FormDescription>
+                                        {t(
+                                          'Generated from the upstream user page (API access token); switch to another mode to clear the stored token'
+                                        )}
+                                      </FormDescription>
+                                      <FormMessage />
+                                    </FormItem>
+                                  )}
+                                />
+                              )}
+                            </fieldset>
+                            <fieldset
+                              disabled={sensitiveLocked}
+                              className='space-y-4 disabled:opacity-60'
+                            >
+                              {currentBalanceQueryMode === 'custom' && (
+                                <>
+                                  {isEditing && (
+                                    <p className='text-muted-foreground text-sm'>
+                                      {t(
+                                        'Hidden request values are kept when saving. Reveal the channel key to view them.'
+                                      )}
+                                    </p>
+                                  )}
+                                  <div className='grid gap-4 sm:grid-cols-[8rem_1fr]'>
+                                    <FormField
+                                      control={form.control}
+                                      name='balance_query_method'
+                                      render={({ field }) => (
+                                        <FormItem>
+                                          <FormLabel>
+                                            {t('HTTP Method')}
+                                          </FormLabel>
+                                          <Select
+                                            items={[
+                                              { value: 'GET', label: 'GET' },
+                                              { value: 'POST', label: 'POST' },
+                                            ]}
+                                            value={
+                                              (
+                                                field.value || 'GET'
+                                              ).toUpperCase() === 'POST'
+                                                ? 'POST'
+                                                : 'GET'
+                                            }
+                                            onValueChange={(value) => {
+                                              const method =
+                                                value?.toUpperCase() || 'GET'
+                                              field.onChange(method)
+                                              if (method === 'GET') {
+                                                form.setValue(
+                                                  'balance_query_body',
+                                                  '',
+                                                  {
+                                                    shouldDirty: true,
+                                                    shouldValidate: true,
+                                                  }
+                                                )
+                                              }
+                                            }}
+                                          >
+                                            <FormControl>
+                                              <SelectTrigger>
+                                                <SelectValue />
+                                              </SelectTrigger>
+                                            </FormControl>
+                                            <SelectContent
+                                              alignItemWithTrigger={false}
+                                            >
+                                              <SelectGroup>
+                                                <SelectItem value='GET'>
+                                                  GET
+                                                </SelectItem>
+                                                <SelectItem value='POST'>
+                                                  POST
+                                                </SelectItem>
+                                              </SelectGroup>
+                                            </SelectContent>
+                                          </Select>
+                                          <FormMessage />
+                                        </FormItem>
+                                      )}
+                                    />
+                                    <FormField
+                                      control={form.control}
+                                      name='balance_query_url'
+                                      render={({ field }) => (
+                                        <FormItem>
+                                          <FormLabel>{t('URL')}</FormLabel>
+                                          <FormControl>
+                                            <Input
+                                              placeholder='{base_url}/v1/balance'
+                                              {...field}
+                                            />
+                                          </FormControl>
+                                          <FormDescription>
+                                            {t(
+                                              'Full URL, a {base_url} placeholder URL, or a path starting with / (joined to the channel base URL)'
+                                            )}
+                                          </FormDescription>
+                                          <FormMessage />
+                                        </FormItem>
+                                      )}
+                                    />
+                                  </div>
+
+                                  <FormField
+                                    control={form.control}
+                                    name='balance_query_headers'
+                                    render={({ field }) => (
+                                      <FormItem>
+                                        <FormLabel>{t('Headers')}</FormLabel>
+                                        <FormControl>
+                                          <JsonCodeEditor
+                                            value={field.value || ''}
+                                            onChange={field.onChange}
+                                            name={field.name}
+                                            onBlur={field.onBlur}
+                                            textareaRef={field.ref}
+                                            disabled={
+                                              sensitiveLocked || isSubmitting
+                                            }
+                                            placeholder={`{\n  "Authorization": "Bearer {key}"\n}`}
+                                            heightClassName='h-28 min-h-28 max-h-28'
+                                          />
+                                        </FormControl>
+                                        <FormDescription className='text-xs'>
+                                          {t('Supported variables')}:{' '}
+                                          <code className='bg-muted rounded px-1 py-0.5'>
+                                            {'{key}'}
+                                          </code>{' '}
+                                          — {t('Channel key')},{' '}
+                                          <code className='bg-muted rounded px-1 py-0.5'>
+                                            {'{base_url}'}
+                                          </code>{' '}
+                                          — {t('Channel Base URL')}
+                                        </FormDescription>
+                                        <FormMessage />
+                                      </FormItem>
+                                    )}
+                                  />
+
+                                  {(
+                                    form.watch('balance_query_method') || 'GET'
+                                  ).toUpperCase() === 'POST' && (
+                                    <FormField
+                                      control={form.control}
+                                      name='balance_query_body'
+                                      render={({ field }) => (
+                                        <FormItem>
+                                          <FormLabel>
+                                            {t('Request Body')}
+                                          </FormLabel>
+                                          <FormControl>
+                                            <Textarea
+                                              rows={3}
+                                              placeholder='{"key":"{key}"}'
+                                              {...field}
+                                            />
+                                          </FormControl>
+                                          <FormMessage />
+                                        </FormItem>
+                                      )}
+                                    />
+                                  )}
+
+                                  <FormField
+                                    control={form.control}
+                                    name='balance_query_extract'
+                                    render={({ field }) => (
+                                      <FormItem>
+                                        <FormLabel>
+                                          {t('Extract Expression')}
+                                        </FormLabel>
+                                        <FormControl>
+                                          <Textarea
+                                            rows={2}
+                                            placeholder='response.balance / 7.25'
+                                            className='font-mono text-xs'
+                                            {...field}
+                                          />
+                                        </FormControl>
+                                        <FormDescription className='text-xs'>
+                                          {t(
+                                            'An expression that computes the balance in USD. Use response.xxx for parsed JSON fields or json("path") for raw lookups; numeric result required.'
+                                          )}
+                                        </FormDescription>
+                                        <FormMessage />
+                                      </FormItem>
+                                    )}
+                                  />
+                                </>
+                              )}
                             </fieldset>
                           </div>
                         )}

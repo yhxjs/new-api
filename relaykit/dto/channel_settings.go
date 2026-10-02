@@ -2,6 +2,7 @@ package dto
 
 import (
 	"fmt"
+	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
@@ -86,6 +87,7 @@ type ChannelOtherSettings struct {
 	UpstreamModelUpdateLastRemovedModels  []string              `json:"upstream_model_update_last_removed_models,omitempty"`  // 上次检测到的可删除模型
 	UpstreamModelUpdateIgnoredModels      []string              `json:"upstream_model_update_ignored_models,omitempty"`       // 手动忽略的模型
 	AdvancedCustom                        *AdvancedCustomConfig `json:"advanced_custom,omitempty"`
+	BalanceQuery                          *ChannelBalanceQuery  `json:"balance_query,omitempty"`
 }
 
 func (s *ChannelOtherSettings) IsOpenRouterEnterprise() bool {
@@ -114,6 +116,170 @@ const (
 
 type AdvancedCustomConfig struct {
 	Routes []AdvancedCustomRoute `json:"advanced_routes,omitempty"`
+}
+
+// Channel balance query modes for New API channels.
+const (
+	BalanceQueryModeSubscription = "subscription" // OpenAI-compatible /v1/dashboard/billing endpoints with the channel key
+	BalanceQueryModeUserAPI      = "user_api"     // New API dashboard /api/user/self with access token + user id
+	BalanceQueryModeCustom       = "custom"       // fully custom request with an expr extractor
+)
+
+// DefaultQuotaPerUnit is the fallback quota-per-USD divisor used by user_api
+// balance queries when the upstream does not report its own ratio.
+const DefaultQuotaPerUnit = 500000.0
+
+// MinBalanceQueryQuotaPerUnit is the smallest usable quota_per_unit. A value
+// between 0 and this bound would overflow the balance division into ±Inf at
+// query time; 0 itself means "use the default" and stays allowed.
+const MinBalanceQueryQuotaPerUnit = 1e-9
+
+// MaxBalanceQueryQuotaPerUnit is the largest usable quota_per_unit. The bound
+// is deliberately loose: an oversized divisor only shrinks the reported
+// balance, but rejecting absurd values surfaces configuration mistakes at
+// save time instead of storing a useless ratio.
+const MaxBalanceQueryQuotaPerUnit = 1e18
+
+// MaxBalanceQueryExtractLength bounds the custom-mode extract expression
+// source. Save-time and runtime compilation separately restrict the language
+// to scalar expressions so collection loops cannot amplify evaluation cost.
+const MaxBalanceQueryExtractLength = 512
+
+// RedactedBalanceQueryValue keeps custom request credentials opaque in channel
+// responses. Saving a marker requires restoring its value from the stored row.
+const RedactedBalanceQueryValue = "[REDACTED]"
+
+type ChannelBalanceQuery struct {
+	Mode string `json:"mode,omitempty"`
+	// user_api mode fields
+	AccessToken  string  `json:"access_token,omitempty"`
+	UserId       string  `json:"user_id,omitempty"`
+	QuotaPerUnit float64 `json:"quota_per_unit,omitempty"`
+	// custom mode fields
+	Method  string            `json:"method,omitempty"`
+	URL     string            `json:"url,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+	Body    string            `json:"body,omitempty"`
+	Extract string            `json:"extract,omitempty"`
+}
+
+func (b *ChannelBalanceQuery) NormalizedMode() string {
+	if b == nil {
+		return BalanceQueryModeSubscription
+	}
+	switch b.Mode {
+	case BalanceQueryModeUserAPI, BalanceQueryModeCustom:
+		return b.Mode
+	default:
+		return BalanceQueryModeSubscription
+	}
+}
+
+func (b *ChannelBalanceQuery) Validate() error {
+	if b == nil {
+		return nil
+	}
+	if b.QuotaPerUnit < 0 {
+		return fmt.Errorf("balance_query.quota_per_unit must not be negative")
+	}
+	if b.QuotaPerUnit > 0 && b.QuotaPerUnit < MinBalanceQueryQuotaPerUnit {
+		return fmt.Errorf("balance_query.quota_per_unit must be at least %g", MinBalanceQueryQuotaPerUnit)
+	}
+	if b.QuotaPerUnit > MaxBalanceQueryQuotaPerUnit {
+		return fmt.Errorf("balance_query.quota_per_unit must be at most %g", MaxBalanceQueryQuotaPerUnit)
+	}
+	switch b.NormalizedMode() {
+	case BalanceQueryModeUserAPI:
+		if strings.TrimSpace(b.AccessToken) == "" {
+			return fmt.Errorf("balance_query.access_token is required for user_api mode")
+		}
+		if strings.TrimSpace(b.UserId) == "" {
+			return fmt.Errorf("balance_query.user_id is required for user_api mode")
+		}
+	case BalanceQueryModeCustom:
+		if b.URL == RedactedBalanceQueryValue || b.Body == RedactedBalanceQueryValue {
+			return fmt.Errorf("redacted balance query request values require an existing channel")
+		}
+		for _, value := range b.Headers {
+			if value == RedactedBalanceQueryValue {
+				return fmt.Errorf("redacted balance query headers require an existing channel")
+			}
+		}
+		if strings.TrimSpace(b.URL) == "" {
+			return fmt.Errorf("balance_query.url is required for custom mode")
+		}
+		if err := validateBalanceQueryURL(b.URL); err != nil {
+			return fmt.Errorf("balance_query.url is invalid: %w", err)
+		}
+		if strings.TrimSpace(b.Extract) == "" {
+			return fmt.Errorf("balance_query.extract is required for custom mode")
+		}
+		// Bound source size before the caller compiles the restricted scalar
+		// expression at save time or query time.
+		if len(b.Extract) > MaxBalanceQueryExtractLength {
+			return fmt.Errorf("balance_query.extract must not exceed %d characters", MaxBalanceQueryExtractLength)
+		}
+		method := strings.ToUpper(strings.TrimSpace(b.Method))
+		if method == "" {
+			method = http.MethodGet
+		}
+		switch method {
+		case http.MethodGet, http.MethodPost:
+		default:
+			return fmt.Errorf("balance_query.method must be GET or POST")
+		}
+		if strings.TrimSpace(b.Body) != "" && method == http.MethodGet {
+			return fmt.Errorf("balance_query.body is only allowed for POST requests")
+		}
+	}
+	return nil
+}
+
+// UsesRelativeURL reports whether the custom-mode URL resolves against the
+// channel base URL at query time (a "{base_url}/..." placeholder or a plain
+// path starting with "/"), and therefore requires a channel base URL to be
+// configured.
+func (b *ChannelBalanceQuery) UsesRelativeURL() bool {
+	if b == nil || b.NormalizedMode() != BalanceQueryModeCustom {
+		return false
+	}
+	trimmed := strings.TrimSpace(b.URL)
+	trimmed = strings.TrimPrefix(trimmed, balanceQueryBaseURLPlaceholder)
+	return strings.HasPrefix(trimmed, "/")
+}
+
+// balanceQueryBaseURLPlaceholder is the {base_url} template placeholder
+// accepted at the start of custom-mode URLs and expanded at query time.
+const balanceQueryBaseURLPlaceholder = "{base_url}"
+
+// validateBalanceQueryURL accepts an absolute http(s) URL, a URL or path
+// starting with the {base_url} placeholder, or a plain path that will be
+// joined onto the channel base URL at query time.
+func validateBalanceQueryURL(rawURL string) error {
+	trimmed := strings.TrimSpace(rawURL)
+	// "{base_url}/v1/balance" is the placeholder form of a relative path;
+	// validate the remainder as a path, the placeholder is expanded at
+	// query time.
+	trimmed = strings.TrimPrefix(trimmed, balanceQueryBaseURLPlaceholder)
+	if strings.HasPrefix(trimmed, "/") {
+		if strings.HasPrefix(trimmed, "//") {
+			return fmt.Errorf("must be a full URL or a URL/path starting with %s or /", balanceQueryBaseURLPlaceholder)
+		}
+		return nil
+	}
+	parsedURL, err := url.Parse(trimmed)
+	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
+		// file:// and other host-less absolute URIs also fail the Host check,
+		// so report the scheme error distinctly only for parseable URLs.
+		if err == nil && parsedURL.Scheme != "" && !strings.EqualFold(parsedURL.Scheme, "http") && !strings.EqualFold(parsedURL.Scheme, "https") {
+			return fmt.Errorf("must use http or https")
+		}
+		return fmt.Errorf("must be a full URL or a URL/path starting with %s or /", balanceQueryBaseURLPlaceholder)
+	}
+	if !strings.EqualFold(parsedURL.Scheme, "http") && !strings.EqualFold(parsedURL.Scheme, "https") {
+		return fmt.Errorf("must use http or https")
+	}
+	return nil
 }
 
 type AdvancedCustomRoute struct {

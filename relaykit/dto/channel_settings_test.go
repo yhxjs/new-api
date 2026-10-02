@@ -3,6 +3,7 @@ package dto
 import (
 	"encoding/json"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -641,4 +642,140 @@ func TestChannelSettingsValidateHTTPTransport(t *testing.T) {
 	err = (&ChannelSettings{HTTPProtocol: "http1", HTTP2ConnectionShards: 2}).ValidateHTTPTransport()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "http2_connection_shards")
+}
+
+func TestChannelBalanceQueryValidate(t *testing.T) {
+	require.NoError(t, (*ChannelBalanceQuery)(nil).Validate())
+	require.NoError(t, (&ChannelBalanceQuery{}).Validate())
+	require.NoError(t, (&ChannelBalanceQuery{Mode: BalanceQueryModeSubscription}).Validate())
+
+	tests := []struct {
+		name        string
+		query       *ChannelBalanceQuery
+		wantErrPart string
+	}{
+		{
+			name:        "user_api missing access token",
+			query:       &ChannelBalanceQuery{Mode: BalanceQueryModeUserAPI, UserId: "1"},
+			wantErrPart: "access_token",
+		},
+		{
+			name:        "user_api missing user id",
+			query:       &ChannelBalanceQuery{Mode: BalanceQueryModeUserAPI, AccessToken: "pat"},
+			wantErrPart: "user_id",
+		},
+		{
+			name:  "user_api valid",
+			query: &ChannelBalanceQuery{Mode: BalanceQueryModeUserAPI, AccessToken: "pat", UserId: "1"},
+		},
+		{
+			name:        "custom missing url",
+			query:       &ChannelBalanceQuery{Mode: BalanceQueryModeCustom, Extract: "response.balance"},
+			wantErrPart: "url",
+		},
+		{
+			name:        "custom relative url without leading slash",
+			query:       &ChannelBalanceQuery{Mode: BalanceQueryModeCustom, URL: "v1/balance", Extract: "response.balance"},
+			wantErrPart: "must be a full URL or a URL/path starting with {base_url} or /",
+		},
+		{
+			name:        "custom protocol-relative url",
+			query:       &ChannelBalanceQuery{Mode: BalanceQueryModeCustom, URL: "//evil.example/balance", Extract: "response.balance"},
+			wantErrPart: "must be a full URL or a URL/path starting with {base_url} or /",
+		},
+		{
+			name:        "custom base_url placeholder followed by protocol-relative path",
+			query:       &ChannelBalanceQuery{Mode: BalanceQueryModeCustom, URL: "{base_url}//evil.example/balance", Extract: "response.balance"},
+			wantErrPart: "must be a full URL or a URL/path starting with {base_url} or /",
+		},
+		{
+			name:        "custom non-http scheme",
+			query:       &ChannelBalanceQuery{Mode: BalanceQueryModeCustom, URL: "file:///etc/passwd", Extract: "response.balance"},
+			wantErrPart: "must use http or https",
+		},
+		{
+			name:        "custom missing extract",
+			query:       &ChannelBalanceQuery{Mode: BalanceQueryModeCustom, URL: "/v1/balance"},
+			wantErrPart: "extract",
+		},
+		{
+			name:        "custom invalid method",
+			query:       &ChannelBalanceQuery{Mode: BalanceQueryModeCustom, URL: "/v1/balance", Method: "DELETE", Extract: "response.balance"},
+			wantErrPart: "GET or POST",
+		},
+		{
+			name:        "custom body with GET method",
+			query:       &ChannelBalanceQuery{Mode: BalanceQueryModeCustom, URL: "/v1/balance", Method: "GET", Body: `{"q":1}`, Extract: "response.balance"},
+			wantErrPart: "body is only allowed for POST",
+		},
+		{
+			name:        "negative quota_per_unit in user_api mode",
+			query:       &ChannelBalanceQuery{Mode: BalanceQueryModeUserAPI, AccessToken: "pat", UserId: "1", QuotaPerUnit: -1},
+			wantErrPart: "quota_per_unit",
+		},
+		{
+			name:        "near-zero quota_per_unit in user_api mode",
+			query:       &ChannelBalanceQuery{Mode: BalanceQueryModeUserAPI, AccessToken: "pat", UserId: "1", QuotaPerUnit: 1e-300},
+			wantErrPart: "quota_per_unit",
+		},
+		{
+			name:        "huge quota_per_unit in user_api mode",
+			query:       &ChannelBalanceQuery{Mode: BalanceQueryModeUserAPI, AccessToken: "pat", UserId: "1", QuotaPerUnit: 1e19},
+			wantErrPart: "quota_per_unit",
+		},
+		{
+			name:  "quota_per_unit at the upper bound is valid",
+			query: &ChannelBalanceQuery{Mode: BalanceQueryModeUserAPI, AccessToken: "pat", UserId: "1", QuotaPerUnit: 1e18},
+		},
+		{
+			name:  "fractional quota_per_unit in user_api mode is valid",
+			query: &ChannelBalanceQuery{Mode: BalanceQueryModeUserAPI, AccessToken: "pat", UserId: "1", QuotaPerUnit: 0.5},
+		},
+		{
+			name:        "custom extract expression too long",
+			query:       &ChannelBalanceQuery{Mode: BalanceQueryModeCustom, URL: "/v1/balance", Extract: strings.Repeat("1+", MaxBalanceQueryExtractLength/2) + "1"},
+			wantErrPart: "must not exceed",
+		},
+		{
+			name:  "custom valid base_url placeholder path",
+			query: &ChannelBalanceQuery{Mode: BalanceQueryModeCustom, URL: "{base_url}/v1/balance", Extract: "response.balance"},
+		},
+		{
+			name:  "custom valid relative path",
+			query: &ChannelBalanceQuery{Mode: BalanceQueryModeCustom, URL: "/v1/balance", Method: "POST", Extract: "response.balance", Body: `{"q":1}`},
+		},
+		{
+			name:  "custom valid absolute url",
+			query: &ChannelBalanceQuery{Mode: BalanceQueryModeCustom, URL: "https://api.example.com/balance", Extract: "response.balance"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.query.Validate()
+			if test.wantErrPart == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), test.wantErrPart)
+		})
+	}
+}
+
+func TestChannelBalanceQueryNormalizedMode(t *testing.T) {
+	assert.Equal(t, BalanceQueryModeSubscription, (*ChannelBalanceQuery)(nil).NormalizedMode())
+	assert.Equal(t, BalanceQueryModeSubscription, (&ChannelBalanceQuery{Mode: "unknown"}).NormalizedMode())
+	assert.Equal(t, BalanceQueryModeUserAPI, (&ChannelBalanceQuery{Mode: BalanceQueryModeUserAPI}).NormalizedMode())
+	assert.Equal(t, BalanceQueryModeCustom, (&ChannelBalanceQuery{Mode: BalanceQueryModeCustom}).NormalizedMode())
+}
+
+func TestChannelBalanceQueryUsesRelativeURL(t *testing.T) {
+	assert.False(t, (*ChannelBalanceQuery)(nil).UsesRelativeURL())
+	// Relative forms: plain path and {base_url} placeholder.
+	assert.True(t, (&ChannelBalanceQuery{Mode: BalanceQueryModeCustom, URL: "/v1/balance"}).UsesRelativeURL())
+	assert.True(t, (&ChannelBalanceQuery{Mode: BalanceQueryModeCustom, URL: "{base_url}/v1/balance"}).UsesRelativeURL())
+	// Absolute forms and non-custom modes never depend on the channel base URL.
+	assert.False(t, (&ChannelBalanceQuery{Mode: BalanceQueryModeCustom, URL: "https://api.example.com/balance"}).UsesRelativeURL())
+	assert.False(t, (&ChannelBalanceQuery{Mode: BalanceQueryModeUserAPI}).UsesRelativeURL())
 }

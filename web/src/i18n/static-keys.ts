@@ -531,6 +531,25 @@ export const STATIC_I18N_KEYS = [
   'Batch detection failed',
   'Batch detection complete: {{channels}} channels, {{add}} to add, {{remove}} to remove, {{fails}} failed',
 
+  // Channel balance query mode descriptions (labels passed to t at runtime)
+  'Queries the OpenAI-compatible dashboard billing endpoints using the channel API key',
+  'Queries the upstream New API user endpoint with an access token and user ID',
+  'Fully customizable request with an expression extractor',
+  'Leave empty to keep existing access token',
+  'Access token generated on the upstream site',
+
+  // Channel balance query validation messages (zod issues rendered via FormMessage)
+  'User ID is required for user API balance queries',
+  'Balance query URL must be a full http(s) URL or start with {base_url} or /',
+  'Base URL is required when the balance query URL is relative',
+  'Extract expression is required for custom balance queries',
+  'Balance query method must be GET or POST',
+  'Balance query body is only allowed for POST requests',
+  'Balance query headers must be a JSON object with string values',
+  'Quota per USD must not be negative',
+  'Quota per USD must be at least 0.000000001',
+  'Quota per USD must be at most 1e+18',
+
   // Advanced Custom model discovery
   'Only one OpenAI Models route is allowed',
   'OpenAI Models route does not support client model rules',

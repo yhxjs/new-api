@@ -2,10 +2,13 @@ package controller
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -129,6 +132,31 @@ func TestFetchAdvancedCustomModelsUsesEnabledSavedMultiKey(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"gpt-4.1-mini"}, models)
 	require.Equal(t, "Bearer enabled-key", <-authorization)
+}
+
+func TestUpstreamModelUpdatePreservesConcurrentBalanceQueryTokenRotation(t *testing.T) {
+	setupBalanceTestDB(t)
+	var channelID int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rotated := `{"upstream_model_update_check_enabled":true,"balance_query":{"mode":"user_api","access_token":"pat-rotated","user_id":"1"}}`
+		require.NoError(t, model.DB.Model(&model.Channel{}).Where("id = ?", channelID).Update("settings", rotated).Error)
+		_, _ = w.Write([]byte(`{"data":[{"id":"gpt-test"}]}`))
+	}))
+	defer server.Close()
+	channel := &model.Channel{
+		Type: constant.ChannelTypeNewAPI, Key: "sk-test", Models: "gpt-test", Group: "default",
+		BaseURL:       &server.URL,
+		OtherSettings: `{"upstream_model_update_check_enabled":true,"balance_query":{"mode":"user_api","access_token":"pat-old","user_id":"1"}}`,
+	}
+	require.NoError(t, model.DB.Create(channel).Error)
+	channelID = channel.Id
+	t.Cleanup(func() { require.NoError(t, model.DB.Delete(&model.Channel{}, channel.Id).Error) })
+	settings := channel.GetOtherSettings()
+	_, _, err := checkAndPersistChannelUpstreamModelUpdates(channel, &settings, true, false)
+	require.NoError(t, err)
+	var stored model.Channel
+	require.NoError(t, model.DB.First(&stored, channel.Id).Error)
+	require.Equal(t, "pat-rotated", stored.GetOtherSettings().BalanceQuery.AccessToken)
 }
 
 func TestFetchAdvancedCustomModelsRejectsNonOKResponse(t *testing.T) {
@@ -603,4 +631,70 @@ func TestDetectAllChannelUpstreamModelUpdatesRejectsExistingActiveTask(t *testin
 	require.Equal(t, http.StatusConflict, recorder.Code)
 	require.Contains(t, recorder.Body.String(), existing.TaskID)
 	require.Contains(t, recorder.Body.String(), "已有模型更新任务正在运行或等待中")
+}
+
+func TestApplyChannelUpstreamModelUpdatesRedactsBalanceQueryToken(t *testing.T) {
+	setupBalanceTestDB(t)
+	// The handler records an operation audit log; give it tables so the
+	// write succeeds quietly. Audit logs go through the separately configured
+	// log database handle.
+	require.NoError(t, model.DB.AutoMigrate(&model.Log{}))
+	previousLogDB := model.LOG_DB
+	model.LOG_DB = model.DB
+	// The audit log resolves the operator name through the user cache; force
+	// the in-memory path so the test never touches a Redis client.
+	previousRedisEnabled := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() {
+		model.LOG_DB = previousLogDB
+		common.RedisEnabled = previousRedisEnabled
+	})
+
+	channel := &model.Channel{
+		Type:    constant.ChannelTypeNewAPI,
+		Key:     "sk-channel-key",
+		Name:    "upstream apply redaction",
+		Models:  "gpt-5",
+		BaseURL: func(v string) *string { return &v }("https://upstream.example"),
+	}
+	channel.OtherSettings = `{"balance_query":{"mode":"user_api","access_token":"pat-secret","user_id":"1"}}`
+	require.NoError(t, model.DB.Create(channel).Error)
+
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/channel/upstream_updates/apply",
+		strings.NewReader(`{"id":`+strconv.Itoa(channel.Id)+`}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = request
+
+	ApplyChannelUpstreamModelUpdates(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Settings string `json:"settings"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal([]byte(recorder.Body.String()), &response))
+	require.True(t, response.Success)
+	assert.NotContains(t, recorder.Body.String(), "pat-secret",
+		"the apply response must not leak the balance-query access token")
+
+	// Non-credential balance query settings still travel with the response.
+	var responseSettings map[string]json.RawMessage
+	require.NoError(t, common.Unmarshal([]byte(response.Data.Settings), &responseSettings))
+	balanceQueryRaw, ok := responseSettings["balance_query"]
+	require.True(t, ok, "balance_query must stay in the response settings")
+	assert.JSONEq(t, `{"mode":"user_api","user_id":"1"}`, string(balanceQueryRaw))
+
+	// The redaction is response-only: the stored settings keep the token.
+	var stored model.Channel
+	require.NoError(t, model.DB.First(&stored, channel.Id).Error)
+	storedSettings := stored.GetOtherSettings()
+	require.NotNil(t, storedSettings.BalanceQuery)
+	assert.Equal(t, "pat-secret", storedSettings.BalanceQuery.AccessToken)
 }

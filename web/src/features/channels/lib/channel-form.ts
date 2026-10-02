@@ -28,7 +28,7 @@ import {
   MODEL_FETCHABLE_TYPES,
   OPENAI_FIELD_PASSTHROUGH_TYPES,
 } from '../constants'
-import type { Channel } from '../types'
+import type { Channel, ChannelBalanceQueryConfig } from '../types'
 import {
   CHANNEL_TYPE_ADVANCED_CUSTOM,
   advancedCustomConfigUsesRelativeUpstreamPath,
@@ -77,6 +77,7 @@ function isOptionalProxyURL(value: string | undefined): boolean {
 export const HTTP_PROTOCOL_AUTO = 'auto'
 export const HTTP_PROTOCOL_HTTP1 = 'http1'
 export const MAX_HTTP2_CONNECTION_SHARDS = 8
+export const REDACTED_BALANCE_QUERY_VALUE = '[REDACTED]'
 
 export function normalizeHttpProtocol(
   value: string | undefined | null
@@ -153,6 +154,63 @@ function isOptionalStatusCodeMapping(value: string | undefined): boolean {
     })
   } catch {
     return false
+  }
+}
+
+// Mirrors dto.MinBalanceQueryQuotaPerUnit on the backend: a near-zero
+// quota_per_unit divisor would overflow the balance division into ±Inf.
+// Zero itself means "use the default" and stays allowed.
+const MIN_BALANCE_QUERY_QUOTA_PER_UNIT = 1e-9
+
+// Mirrors dto.MaxBalanceQueryQuotaPerUnit on the backend: an oversized
+// divisor only shrinks the reported balance, but rejecting it at save time
+// surfaces configuration mistakes early.
+const MAX_BALANCE_QUERY_QUOTA_PER_UNIT = 1e18
+
+function isValidBalanceQueryCustomURL(value: string | undefined): boolean {
+  let trimmed = value?.trim() || ''
+  if (!trimmed) return false
+  // "{base_url}/v1/balance" is the placeholder form of a relative path; the
+  // placeholder is expanded against the channel base URL at query time.
+  trimmed = trimmed.replace(/^\{base_url\}/, '')
+  if (!trimmed) return false
+  if (trimmed.startsWith('/') && !trimmed.startsWith('//')) return true
+  try {
+    const parsed = new URL(trimmed)
+    return (
+      (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
+      Boolean(parsed.hostname)
+    )
+  } catch {
+    return false
+  }
+}
+
+// Whether the custom balance query URL resolves against the channel base URL
+// ({base_url}/... or a plain /path), and so requires a base URL to be set.
+function usesRelativeBalanceQueryURL(value: string | undefined): boolean {
+  let trimmed = value?.trim() || ''
+  if (!trimmed) return false
+  trimmed = trimmed.replace(/^\{base_url\}/, '')
+  return trimmed.startsWith('/') && !trimmed.startsWith('//')
+}
+
+function parseBalanceQueryHeaders(
+  value: string | undefined
+): Record<string, string> | null {
+  if (!value?.trim()) return {}
+  try {
+    const parsed = parseOptionalJson(value)
+    if (parsed === undefined) return {}
+    if (!isJsonObjectValue(parsed)) return null
+    const result: Record<string, string> = {}
+    for (const [name, headerValue] of Object.entries(parsed)) {
+      if (typeof headerValue !== 'string') return null
+      if (name.trim()) result[name.trim()] = headerValue
+    }
+    return result
+  } catch {
+    return null
   }
 }
 
@@ -284,6 +342,18 @@ export const channelFormSchema = z
     upstream_model_update_check_enabled: z.boolean().optional(),
     upstream_model_update_auto_sync_enabled: z.boolean().optional(),
     upstream_model_update_ignored_models: z.string().optional(),
+    // Balance query settings (stored in settings JSON, New API channels)
+    balance_query_mode: z
+      .enum(['subscription', 'user_api', 'custom'])
+      .optional(),
+    balance_query_access_token: z.string().optional(),
+    balance_query_user_id: z.string().optional(),
+    balance_query_quota_per_unit: z.number().optional(),
+    balance_query_method: z.string().optional(),
+    balance_query_url: z.string().optional(),
+    balance_query_headers: z.string().optional(),
+    balance_query_body: z.string().optional(),
+    balance_query_extract: z.string().optional(),
   })
   .superRefine((data, ctx) => {
     if (
@@ -387,6 +457,125 @@ export const channelFormSchema = z
       )
     }
 
+    if (data.type === CHANNEL_TYPE_NEW_API) {
+      if (data.balance_query_mode === 'user_api') {
+        // The access token is intentionally not required here: creating is
+        // enforced in the drawer submit handler (like the channel key), and
+        // editing keeps an empty token as "keep existing".
+        if (!data.balance_query_user_id?.trim()) {
+          addRequiredIssue(
+            ctx,
+            'balance_query_user_id',
+            'User ID is required for user API balance queries'
+          )
+        }
+      }
+      if (data.balance_query_mode === 'custom') {
+        let keepsRedactedURL = false
+        if (data.balance_query_url === REDACTED_BALANCE_QUERY_VALUE) {
+          try {
+            const savedQuery = parseBalanceQueryConfig(data.settings || '{}')
+            keepsRedactedURL =
+              savedQuery?.mode === 'custom' &&
+              savedQuery.url === REDACTED_BALANCE_QUERY_VALUE
+          } catch {
+            // Invalid settings are reported by the settings field validator.
+          }
+        }
+        if (
+          !data.balance_query_url?.trim() ||
+          (!keepsRedactedURL &&
+            !isValidBalanceQueryCustomURL(data.balance_query_url))
+        ) {
+          addRequiredIssue(
+            ctx,
+            'balance_query_url',
+            'Balance query URL must be a full http(s) URL or start with {base_url} or /'
+          )
+        }
+        // Mirror the backend save-time guard: a relative URL resolves against
+        // the channel base URL at query time, so it cannot work without one.
+        if (
+          isValidBalanceQueryCustomURL(data.balance_query_url) &&
+          usesRelativeBalanceQueryURL(data.balance_query_url) &&
+          !data.base_url?.trim()
+        ) {
+          addRequiredIssue(
+            ctx,
+            'base_url',
+            'Base URL is required when the balance query URL is relative'
+          )
+        }
+        if (!data.balance_query_extract?.trim()) {
+          addRequiredIssue(
+            ctx,
+            'balance_query_extract',
+            'Extract expression is required for custom balance queries'
+          )
+        }
+        const method = data.balance_query_method?.trim().toUpperCase() || 'GET'
+        if (method !== 'GET' && method !== 'POST') {
+          addRequiredIssue(
+            ctx,
+            'balance_query_method',
+            'Balance query method must be GET or POST'
+          )
+        }
+        if (method === 'GET' && Boolean(data.balance_query_body?.trim())) {
+          addRequiredIssue(
+            ctx,
+            'balance_query_body',
+            'Balance query body is only allowed for POST requests'
+          )
+        }
+        if (parseBalanceQueryHeaders(data.balance_query_headers) === null) {
+          addRequiredIssue(
+            ctx,
+            'balance_query_headers',
+            'Balance query headers must be a JSON object with string values'
+          )
+        }
+      }
+      if (
+        data.balance_query_mode === 'user_api' &&
+        data.balance_query_quota_per_unit != null &&
+        data.balance_query_quota_per_unit < 0
+      ) {
+        addRequiredIssue(
+          ctx,
+          'balance_query_quota_per_unit',
+          'Quota per USD must not be negative'
+        )
+      }
+      // Zero passes (backend falls back to its default); a near-zero divisor
+      // overflows the balance division and the backend rejects it at save.
+      if (
+        data.balance_query_mode === 'user_api' &&
+        data.balance_query_quota_per_unit != null &&
+        data.balance_query_quota_per_unit > 0 &&
+        data.balance_query_quota_per_unit < MIN_BALANCE_QUERY_QUOTA_PER_UNIT
+      ) {
+        addRequiredIssue(
+          ctx,
+          'balance_query_quota_per_unit',
+          'Quota per USD must be at least 0.000000001'
+        )
+      }
+      // Mirrors the backend MaxBalanceQueryQuotaPerUnit bound: an absurd
+      // divisor only shrinks the reported balance, but is a config mistake.
+      if (
+        data.balance_query_mode === 'user_api' &&
+        data.balance_query_quota_per_unit != null &&
+        data.balance_query_quota_per_unit > MAX_BALANCE_QUERY_QUOTA_PER_UNIT
+      ) {
+        addRequiredIssue(
+          ctx,
+          'balance_query_quota_per_unit',
+          'Quota per USD must be at most 1e+18'
+        )
+      }
+    }
+
     const protocol = normalizeHttpProtocol(data.http_protocol)
     const shards = data.http2_connection_shards ?? 1
     if (shards < 1 || shards > MAX_HTTP2_CONNECTION_SHARDS) {
@@ -465,6 +654,145 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   upstream_model_update_auto_sync_enabled: false,
   upstream_model_update_ignored_models: '',
   advanced_custom: '',
+  // Balance query settings
+  balance_query_mode: 'subscription',
+  balance_query_access_token: '',
+  balance_query_user_id: '',
+  balance_query_quota_per_unit: undefined,
+  balance_query_method: 'GET',
+  balance_query_url: '',
+  balance_query_headers: '',
+  balance_query_body: '',
+  balance_query_extract: '',
+}
+
+/**
+ * All balance-query form fields. Every one of them — including the access
+ * token — is gated by ChannelSensitiveWrite: the backend redacts
+ * access tokens and custom request values from channel responses and restores
+ * them server-side on submit. An unchanged edit stays non-sensitive, while
+ * supplying a different credential requires the same policy as the channel key.
+ */
+export const BALANCE_QUERY_FORM_FIELDS = [
+  'balance_query_mode',
+  'balance_query_access_token',
+  'balance_query_user_id',
+  'balance_query_quota_per_unit',
+  'balance_query_method',
+  'balance_query_url',
+  'balance_query_headers',
+  'balance_query_body',
+  'balance_query_extract',
+] satisfies (keyof ChannelFormValues)[]
+
+function foldBalanceQueryField(name: string): string {
+  return name.replaceAll('ſ', 's').replaceAll('K', 'k').toLowerCase()
+}
+
+// Slice direct members of a validated object. JSON.parse handles each value;
+// retaining the source preserves duplicate members and Go DTO merge order.
+function settingsObjectMembers(source: string) {
+  if (!isJsonObjectValue(JSON.parse(source))) return []
+  const members: Array<{
+    name: string
+    value: unknown
+    rawValue: string
+    source: string
+  }> = []
+  let depth = 0
+  let name: string | null = null
+  let keyStart = 0
+  let valueStart = 0
+  for (const match of source.matchAll(/"(?:\\.|[^"\\])*"|[{}[\]:,]/g)) {
+    const token = match[0]
+    if (token === '{' || token === '[') depth++
+    if (token === '}' || token === ']') depth--
+    if (depth === 1 && token.startsWith('"') && name === null) {
+      name = JSON.parse(token)
+      keyStart = match.index
+    } else if (depth === 1 && token === ':') {
+      valueStart = match.index + 1
+    } else if (
+      name !== null &&
+      ((depth === 1 && token === ',') || (depth === 0 && token === '}'))
+    ) {
+      const rawValue = source.slice(valueStart, match.index).trim()
+      members.push({
+        name,
+        value: JSON.parse(rawValue),
+        rawValue,
+        source: source.slice(keyStart, match.index),
+      })
+      name = null
+    }
+  }
+  return members
+}
+
+function parseBalanceQueryConfig(
+  settings: string
+): Record<string, unknown> | undefined {
+  let query: Record<string, unknown> | undefined
+  const fields = new Set(
+    BALANCE_QUERY_FORM_FIELDS.map((field) =>
+      field.slice('balance_query_'.length)
+    )
+  )
+  for (const member of settingsObjectMembers(settings)) {
+    if (foldBalanceQueryField(member.name) !== 'balance_query') continue
+    if (member.value === null) {
+      query = undefined
+      continue
+    }
+    if (!isJsonObjectValue(member.value)) continue
+    query ??= {}
+    for (const field of settingsObjectMembers(member.rawValue)) {
+      const name = foldBalanceQueryField(field.name)
+      if (!fields.has(name)) continue
+      if (name === 'headers') {
+        if (field.value === null) delete query.headers
+        else if (isJsonObjectValue(field.value)) {
+          const headers = isJsonObjectValue(query.headers) ? query.headers : {}
+          query.headers = {
+            ...headers,
+            ...Object.fromEntries(
+              Object.entries(field.value).map(([key, value]) => [
+                key,
+                value ?? '',
+              ])
+            ),
+          }
+        }
+      } else if (field.value !== null) {
+        query[name] = field.value
+      }
+    }
+  }
+  return query
+}
+
+function balanceQueryFormDefaults(query?: Record<string, unknown>) {
+  const config = query as ChannelBalanceQueryConfig | undefined
+  let mode: 'subscription' | 'user_api' | 'custom' = 'subscription'
+  if (config?.mode === 'user_api' || config?.mode === 'custom') {
+    mode = config.mode
+  }
+  return {
+    balance_query_mode: mode,
+    balance_query_access_token: config?.access_token || '',
+    balance_query_user_id: String(config?.user_id ?? ''),
+    balance_query_quota_per_unit:
+      config?.quota_per_unit && config.quota_per_unit > 0
+        ? config.quota_per_unit
+        : undefined,
+    balance_query_method: config?.method || 'GET',
+    balance_query_url: config?.url || '',
+    balance_query_headers: config?.headers
+      ? JSON.stringify(config.headers, null, 2)
+      : '',
+    balance_query_body: config?.body || '',
+    balance_query_extract: config?.extract || '',
+  }
 }
 
 // ============================================================================
@@ -531,6 +859,7 @@ export function transformChannelToFormDefaults(
   let upstreamModelUpdateAutoSyncEnabled = false
   let upstreamModelUpdateIgnoredModels = ''
   let advancedCustom = ''
+  let balanceQueryDefaults = balanceQueryFormDefaults()
 
   if (channel.settings) {
     try {
@@ -559,6 +888,9 @@ export function transformChannelToFormDefaults(
       if (parsed.advanced_custom) {
         advancedCustom = stringifyAdvancedCustomConfig(parsed.advanced_custom)
       }
+      balanceQueryDefaults = balanceQueryFormDefaults(
+        parseBalanceQueryConfig(channel.settings)
+      )
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error('Failed to parse channel settings:', error)
@@ -610,6 +942,7 @@ export function transformChannelToFormDefaults(
     upstream_model_update_auto_sync_enabled: upstreamModelUpdateAutoSyncEnabled,
     upstream_model_update_ignored_models: upstreamModelUpdateIgnoredModels,
     advanced_custom: advancedCustom,
+    ...balanceQueryDefaults,
   }
 }
 
@@ -651,11 +984,21 @@ export function buildSettingJSON(formData: ChannelFormValues): string {
  */
 function buildSettingsJSON(formData: ChannelFormValues): string {
   let settingsObj: Record<string, unknown> = {}
+  let originalBalanceQuery = balanceQueryFormDefaults()
+  let balanceQueryMembers: string[] = []
 
   // Try to parse existing settings first
   if (formData.settings && formData.settings !== '{}') {
     try {
       settingsObj = JSON.parse(formData.settings)
+      originalBalanceQuery = balanceQueryFormDefaults(
+        parseBalanceQueryConfig(formData.settings)
+      )
+      balanceQueryMembers = settingsObjectMembers(formData.settings)
+        .filter(
+          (member) => foldBalanceQueryField(member.name) === 'balance_query'
+        )
+        .map((member) => member.source)
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error('Failed to parse existing settings:', error)
@@ -780,7 +1123,82 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     delete settingsObj.advanced_custom
   }
 
-  return JSON.stringify(settingsObj)
+  // Balance query settings for New API channels
+  if (formData.type === CHANNEL_TYPE_NEW_API) {
+    const mode = formData.balance_query_mode || 'subscription'
+    const balanceQuery: Record<string, unknown> = { mode }
+    if (mode === 'user_api') {
+      const accessToken = formData.balance_query_access_token?.trim() || ''
+      const userId = formData.balance_query_user_id?.trim() || ''
+      if (accessToken) balanceQuery.access_token = accessToken
+      if (userId) balanceQuery.user_id = userId
+      if (
+        formData.balance_query_quota_per_unit != null &&
+        formData.balance_query_quota_per_unit > 0
+      ) {
+        balanceQuery.quota_per_unit = formData.balance_query_quota_per_unit
+      }
+    }
+    if (mode === 'custom') {
+      const method =
+        formData.balance_query_method?.trim().toUpperCase() || 'GET'
+      const url = formData.balance_query_url?.trim() || ''
+      const extract = formData.balance_query_extract?.trim() || ''
+      balanceQuery.method = method
+      if (url) balanceQuery.url = url
+      const headers = parseBalanceQueryHeaders(formData.balance_query_headers)
+      if (headers == null) {
+        // The schema runs this exact parser, so a null here means the submit
+        // bypassed validation; never let a malformed header object be
+        // silently dropped from the submitted payload, or the query will run
+        // without the credentials the user configured.
+        throw new Error(
+          'Balance query headers must be a JSON object with string values'
+        )
+      }
+      if (Object.keys(headers).length > 0) {
+        balanceQuery.headers = headers
+      }
+      const body = formData.balance_query_body?.trim() || ''
+      if (body) balanceQuery.body = body
+      if (extract) balanceQuery.extract = extract
+    }
+    // Skip writing a bare subscription default: legacy channels never stored
+    // balance_query settings, and injecting {"mode":"subscription"} would
+    // make every edit look like a settings change to the backend's
+    // sensitivity check. The backend treats the default the same way when
+    // comparing settings, so both sides agree the default is "not stored".
+    const unchanged = BALANCE_QUERY_FORM_FIELDS.every((field) => {
+      const value =
+        formData[field] ??
+        (field === 'balance_query_mode' ? 'subscription' : '')
+      return value === (originalBalanceQuery[field] ?? '')
+    })
+    for (const name of Object.keys(settingsObj)) {
+      if (foldBalanceQueryField(name) === 'balance_query') {
+        delete settingsObj[name]
+      }
+    }
+    if (
+      !unchanged &&
+      (mode !== 'subscription' || balanceQueryMembers.length > 0)
+    ) {
+      settingsObj.balance_query = balanceQuery
+    }
+    if (!unchanged) balanceQueryMembers = []
+  } else {
+    for (const name of Object.keys(settingsObj)) {
+      if (foldBalanceQueryField(name) === 'balance_query') {
+        delete settingsObj[name]
+      }
+    }
+    balanceQueryMembers = []
+  }
+
+  const settingsJSON = JSON.stringify(settingsObj)
+  if (balanceQueryMembers.length === 0) return settingsJSON
+  const separator = Object.keys(settingsObj).length > 0 ? ',' : ''
+  return `${settingsJSON.slice(0, -1)}${separator}${balanceQueryMembers.join(',')}}`
 }
 
 function normalizeBaseUrl(value: string | undefined): string {

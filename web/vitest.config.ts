@@ -31,6 +31,11 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
+    server: {
+      deps: {
+        inline: ['@lobehub/icons', '@lobehub/ui', '@emoji-mart/data'],
+      },
+    },
     setupFiles: ['./src/test-setup.ts'],
     clearMocks: true,
     restoreMocks: true,

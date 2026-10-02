@@ -137,6 +137,42 @@ func normalizeClickHouseDSN(dsn string) string {
 	return parsed.String()
 }
 
+func openSQLiteDB() (*gorm.DB, error) {
+	path, rawQuery, _ := strings.Cut(common.SQLitePath, "?")
+	query, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return nil, fmt.Errorf("invalid SQLite DSN query: %w", err)
+	}
+	hasBusyTimeout, hasJournalMode := false, false
+	for _, pragma := range query["_pragma"] {
+		name, _, _ := strings.Cut(pragma, "(")
+		name, _, _ = strings.Cut(name, "=")
+		if index := strings.LastIndexByte(name, '.'); index >= 0 {
+			name = name[index+1:]
+		}
+		name = strings.Trim(strings.TrimSpace(name), "\"`[]")
+		switch strings.ToLower(name) {
+		case "busy_timeout":
+			hasBusyTimeout = true
+		case "journal_mode":
+			hasJournalMode = true
+		}
+	}
+	// Custom SQLITE_PATH values inherit safe defaults without overriding explicit PRAGMAs.
+	defaults := []string{}
+	if !hasBusyTimeout {
+		defaults = append(defaults, "busy_timeout(30000)")
+	}
+	if !hasJournalMode {
+		defaults = append(defaults, "journal_mode(WAL)")
+	}
+	query["_pragma"] = append(defaults, query["_pragma"]...)
+	if !query.Has("_txlock") {
+		query.Set("_txlock", "immediate")
+	}
+	return gorm.Open(sqlite.Open(path+"?"+query.Encode()), newGormConfig(true))
+}
+
 func chooseDB(envName string, isLog bool) (*gorm.DB, common.DatabaseType, error) {
 	dsn := os.Getenv(envName)
 	if dsn != "" {
@@ -161,7 +197,7 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, common.DatabaseType, error)
 		}
 		if strings.HasPrefix(dsn, "local") {
 			common.SysLog("SQL_DSN not set, using SQLite as database")
-			db, err := gorm.Open(sqlite.Open(common.SQLitePath), newGormConfig(true))
+			db, err := openSQLiteDB()
 			return db, common.DatabaseTypeSQLite, err
 		}
 		// Use MySQL
@@ -179,7 +215,7 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, common.DatabaseType, error)
 	}
 	// Use SQLite
 	common.SysLog("SQL_DSN not set, using SQLite as database")
-	db, err := gorm.Open(sqlite.Open(common.SQLitePath), newGormConfig(true))
+	db, err := openSQLiteDB()
 	return db, common.DatabaseTypeSQLite, err
 }
 
