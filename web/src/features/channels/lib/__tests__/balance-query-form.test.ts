@@ -27,6 +27,7 @@ import {
   transformChannelToFormDefaults,
   transformFormDataToUpdatePayload,
 } from '../channel-form'
+import { isChannelBalanceQueryDisabled } from '../channel-utils'
 
 function newAPIForm(
   overrides: Record<string, unknown> = {}
@@ -535,13 +536,13 @@ describe('balance query settings roundtrip', () => {
     })
   })
 
-  test('subscription mode does not inject a default into legacy settings', () => {
+  test('disabled mode does not inject a default into legacy settings', () => {
     // Legacy New API channels never stored balance_query; the default
-    // subscription mode must stay "not stored" instead of injecting
-    // {"mode":"subscription"}, which the backend sensitivity check would
+    // disabled mode must stay "not stored" instead of injecting
+    // {"mode":"disabled"}, which the backend sensitivity check would
     // flag as a settings change on every unrelated edit.
     const formValues = transformChannelToFormDefaults(channelWithSettings({}))
-    expect(formValues.balance_query_mode).toBe('subscription')
+    expect(formValues.balance_query_mode).toBe('disabled')
 
     const payload = transformFormDataToUpdatePayload(
       { ...formValues, key: '' },
@@ -549,6 +550,95 @@ describe('balance query settings roundtrip', () => {
     )
     const settings = JSON.parse(String(payload.settings))
     expect(settings.balance_query).toBeUndefined()
+  })
+
+  test('isChannelBalanceQueryDisabled accurately classifies channels', () => {
+    // Non-NewAPI channel
+    expect(
+      isChannelBalanceQueryDisabled({
+        type: 1,
+      } as unknown as Channel)
+    ).toBe(false)
+
+    // NewAPI channel without settings (defaults to disabled)
+    expect(
+      isChannelBalanceQueryDisabled({
+        type: CHANNEL_TYPE_NEW_API,
+      } as unknown as Channel)
+    ).toBe(true)
+
+    // NewAPI channel with explicit disabled mode
+    expect(
+      isChannelBalanceQueryDisabled({
+        type: CHANNEL_TYPE_NEW_API,
+        settings: JSON.stringify({ balance_query: { mode: 'disabled' } }),
+      } as unknown as Channel)
+    ).toBe(true)
+
+    // NewAPI channel with subscription mode
+    expect(
+      isChannelBalanceQueryDisabled({
+        type: CHANNEL_TYPE_NEW_API,
+        settings: JSON.stringify({ balance_query: { mode: 'subscription' } }),
+      } as unknown as Channel)
+    ).toBe(false)
+
+    // NewAPI channel with user_api mode
+    expect(
+      isChannelBalanceQueryDisabled({
+        type: CHANNEL_TYPE_NEW_API,
+        settings: JSON.stringify({
+          balance_query: { mode: 'user_api', access_token: 't', user_id: '1' },
+        }),
+      } as unknown as Channel)
+    ).toBe(false)
+  })
+
+  test.each([
+    { name: 'null settings disable queries', settings: 'null', disabled: true },
+    {
+      name: 'invalid JSON disables queries',
+      settings: '{',
+      disabled: true,
+    },
+    {
+      name: 'case aliases enable subscription queries',
+      settings: '{"BALANCE_QUERY":{"Mode":"subscription"}}',
+      disabled: false,
+    },
+    {
+      name: 'duplicate objects preserve an enabled mode',
+      settings:
+        '{"balance_query":{"mode":"subscription"},"balance_query":{"quota_per_unit":1000}}',
+      disabled: false,
+    },
+    {
+      name: 'the last non-null scalar alias enables queries',
+      settings:
+        '{"balance_query":{"mode":"disabled","Mode":"subscription","MODE":null}}',
+      disabled: false,
+    },
+    {
+      name: 'a null query alias disables an earlier enabled mode',
+      settings: '{"balance_query":{"mode":"user_api"},"Balance_Query":null}',
+      disabled: true,
+    },
+    {
+      name: 'an object after a null alias enables queries',
+      settings:
+        '{"balance_query":{"mode":"disabled"},"Balance_Query":null,"BALANCE_QUERY":{"Mode":"user_api","User_Id":"42"}}',
+      disabled: false,
+    },
+    {
+      name: 'a later mode alias disables queries',
+      settings: '{"balance_query":{"mode":"user_api","Mode":"disabled"}}',
+      disabled: true,
+    },
+  ])('balance query availability follows $name', (testCase) => {
+    const channel = channelWithSettings({})
+    channel.settings = testCase.settings
+
+    expect(isChannelBalanceQueryDisabled(channel)).toBe(testCase.disabled)
   })
 
   test('an explicitly stored subscription entry survives an edit', () => {

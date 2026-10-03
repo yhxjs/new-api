@@ -116,7 +116,11 @@ export interface ChannelOtherSettings {
   balance_query?: ChannelBalanceQueryConfig
 }
 
-export type ChannelBalanceQueryMode = 'subscription' | 'user_api' | 'custom'
+export type ChannelBalanceQueryMode =
+  | 'disabled'
+  | 'subscription'
+  | 'user_api'
+  | 'custom'
 
 export interface ChannelBalanceQueryConfig {
   mode?: ChannelBalanceQueryMode

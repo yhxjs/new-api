@@ -34,7 +34,8 @@ func TestManualBalanceRefreshDoesNotExposeRedirectCredentials(t *testing.T) {
 			redirectPath: "/v1/dashboard/billing/subscription",
 		},
 		{
-			name:         "legacy subscription usage channel key",
+			name:         "subscription usage channel key",
+			query:        &dto.ChannelBalanceQuery{Mode: dto.BalanceQueryModeSubscription},
 			secrets:      []string{"sk-channel-key"},
 			redirectPath: "/v1/dashboard/billing/usage",
 		},
@@ -132,7 +133,6 @@ func TestSubscriptionBalanceRefreshClearsFailureAfterModeSwitch(t *testing.T) {
 				settings string
 			}{
 				{"explicit subscription", `{"balance_query":{"mode":"subscription"}}`},
-				{"default subscription", `{}`},
 			} {
 				for _, refresh := range []string{"manual", "automatic"} {
 					t.Run(test.name+"/"+refresh, func(t *testing.T) {
@@ -236,7 +236,7 @@ func TestSubscriptionBalanceRejectsInvalidUpstreamResponses(t *testing.T) {
 					defer server.Close()
 					autoBan := 1
 					channel := model.Channel{
-						Type: constant.ChannelTypeNewAPI, Name: "subscription upstream", Key: "sk-test",
+						Type: constant.ChannelTypeNewAPI, Name: "subscription upstream", Key: "sk-test", OtherSettings: `{"balance_query":{"mode":"subscription"}}`,
 						BaseURL: &server.URL, Status: common.ChannelStatusEnabled, AutoBan: &autoBan,
 						Balance: 7, BalanceUpdatedTime: 123,
 					}

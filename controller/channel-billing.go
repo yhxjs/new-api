@@ -478,11 +478,24 @@ func updateChannelBalance(channel *model.Channel) (channelBalanceResult, error) 
 	return channelBalanceResult{Balance: balance}, err
 }
 
+// newAPIBalanceQueryDisabled reports whether balance queries are turned off
+// for the channel: New API channels default to disabled mode, and only an
+// explicitly stored subscription/user_api/custom mode enables them.
+func newAPIBalanceQueryDisabled(channel *model.Channel) bool {
+	if channel.Type != constant.ChannelTypeNewAPI {
+		return false
+	}
+	return channel.GetOtherSettings().BalanceQuery.NormalizedMode() == dto.BalanceQueryModeDisabled
+}
+
 // updateNewAPIChannelBalance resolves the balance for New API channels using
-// the channel's balance_query settings (user_api / custom). It returns
-// handled=false for subscription mode (the default), which keeps the shared
+// the channel's balance_query settings (disabled / user_api / custom). It returns
+// handled=false for subscription mode, which keeps the shared
 // OpenAI-compatible dashboard flow in updateStandardChannelBalance.
 func updateNewAPIChannelBalance(channel *model.Channel) (bool, float64, error) {
+	if newAPIBalanceQueryDisabled(channel) {
+		return true, 0, errors.New("余额查询已关闭")
+	}
 	balanceQuery := channel.GetOtherSettings().BalanceQuery
 	key := strings.TrimSpace(channel.Key)
 	switch balanceQuery.NormalizedMode() {
@@ -899,6 +912,13 @@ func UpdateChannelBalance(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "Task Plugin channels do not support balance queries"})
 		return
 	}
+	if newAPIBalanceQueryDisabled(channel) {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "余额查询已关闭",
+		})
+		return
+	}
 	if channel.ChannelInfo.IsMultiKey {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
@@ -913,7 +933,7 @@ func UpdateChannelBalance(c *gin.Context) {
 		// custom-template misconfiguration apart from an upstream outage)
 		// instead of the raw expr/transport error text.
 		if channel.Type == constant.ChannelTypeNewAPI {
-			if bq := channel.GetOtherSettings().BalanceQuery; bq != nil && bq.NormalizedMode() != dto.BalanceQueryModeSubscription {
+			if bq := channel.GetOtherSettings().BalanceQuery; bq != nil && bq.NormalizedMode() != dto.BalanceQueryModeSubscription && bq.NormalizedMode() != dto.BalanceQueryModeDisabled {
 				err = fmt.Errorf("%s balance query failed: %w", bq.NormalizedMode(), err)
 			}
 		}
@@ -944,6 +964,9 @@ func updateAllChannelsBalance() error {
 	}
 	for _, channel := range channels {
 		if channel.Status != common.ChannelStatusEnabled {
+			continue
+		}
+		if newAPIBalanceQueryDisabled(channel) {
 			continue
 		}
 		if channel.ChannelInfo.IsMultiKey {

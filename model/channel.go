@@ -993,8 +993,8 @@ func (channel *Channel) RestoreBalanceQueryAccessToken(origin *Channel) {
 // (key order normalized) so the token can be excised. An unreadable
 // balance_query object carries no comparable credential and is dropped the
 // same way RedactBalanceQueryAccessToken drops it from responses. A
-// balance_query reduced to the bare subscription default (nothing beyond the
-// mode) counts as absent, so a frontend-injected {"mode":"subscription"}
+// balance_query reduced to the bare disabled default (nothing beyond the
+// mode) counts as absent, so a frontend-injected {"mode":"disabled"}
 // equals a legacy channel that never stored balance query settings.
 //
 // Invariant: the canonical form never moves or drops keys other than
@@ -1116,7 +1116,7 @@ func (channel *Channel) canonicalizeOtherSettingsForCompare() (string, string, b
 			if !reduced && len(balanceQuery) == 1 {
 				var mode string
 				if err := common.Unmarshal(balanceQuery["mode"], &mode); err == nil &&
-					(mode == "" || mode == dto.BalanceQueryModeSubscription) {
+					(mode == "" || mode == dto.BalanceQueryModeDisabled) {
 					reduced = true
 				}
 			}

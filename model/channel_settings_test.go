@@ -346,18 +346,18 @@ func TestCanonicalizeOtherSettingsForCompare(t *testing.T) {
 		wantUnparsable bool
 	}{
 		{
-			name: "bare subscription default is absent",
-			raw:  `{"balance_query":{"mode":"subscription"}}`,
+			name: "bare disabled default is absent",
+			raw:  `{"balance_query":{"mode":"disabled"}}`,
 			want: `{}`,
 		},
 		{
-			name: "empty mode counts as the subscription default",
+			name: "empty mode counts as the disabled default",
 			raw:  `{"balance_query":{"mode":""}}`,
 			want: `{}`,
 		},
 		{
 			name: "default is dropped while other keys survive byte-exactly",
-			raw:  `{"a":1,"balance_query":{"mode":"subscription"},"future":{"big":12345678901234567890}}`,
+			raw:  `{"a":1,"balance_query":{"mode":"disabled"},"future":{"big":12345678901234567890}}`,
 			want: `{"a":1,"future":{"big":12345678901234567890}}`,
 		},
 		{

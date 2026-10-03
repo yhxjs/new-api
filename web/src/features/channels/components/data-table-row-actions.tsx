@@ -36,6 +36,7 @@ import {
 } from 'lucide-react'
 import { useContext, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Button } from '@/components/ui/button'
@@ -65,6 +66,7 @@ import {
   handleDeleteChannel,
   handleTestChannel,
   handleToggleChannelStatus,
+  isChannelBalanceQueryDisabled,
   isChannelEnabled,
   isMultiKeyChannel,
 } from '../lib'
@@ -119,6 +121,10 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   }
 
   const handleQueryBalance = () => {
+    if (isChannelBalanceQueryDisabled(channel)) {
+      toast.error(t('Balance query is disabled'))
+      return
+    }
     setCurrentRow(channel)
     setOpen('balance-query')
   }

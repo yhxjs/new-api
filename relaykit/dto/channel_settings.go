@@ -120,6 +120,7 @@ type AdvancedCustomConfig struct {
 
 // Channel balance query modes for New API channels.
 const (
+	BalanceQueryModeDisabled     = "disabled"     // Balance query disabled (default)
 	BalanceQueryModeSubscription = "subscription" // OpenAI-compatible /v1/dashboard/billing endpoints with the channel key
 	BalanceQueryModeUserAPI      = "user_api"     // New API dashboard /api/user/self with access token + user id
 	BalanceQueryModeCustom       = "custom"       // fully custom request with an expr extractor
@@ -165,13 +166,13 @@ type ChannelBalanceQuery struct {
 
 func (b *ChannelBalanceQuery) NormalizedMode() string {
 	if b == nil {
-		return BalanceQueryModeSubscription
+		return BalanceQueryModeDisabled
 	}
 	switch b.Mode {
-	case BalanceQueryModeUserAPI, BalanceQueryModeCustom:
+	case BalanceQueryModeSubscription, BalanceQueryModeUserAPI, BalanceQueryModeCustom:
 		return b.Mode
 	default:
-		return BalanceQueryModeSubscription
+		return BalanceQueryModeDisabled
 	}
 }
 

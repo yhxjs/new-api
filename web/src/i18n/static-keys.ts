@@ -532,6 +532,10 @@ export const STATIC_I18N_KEYS = [
   'Batch detection complete: {{channels}} channels, {{add}} to add, {{remove}} to remove, {{fails}} failed',
 
   // Channel balance query mode descriptions (labels passed to t at runtime)
+  'Closed',
+  'Do not query balance',
+  'Balance query is disabled',
+  'This channel has balance query disabled and will not query upstream balance.',
   'Queries the OpenAI-compatible dashboard billing endpoints using the channel API key',
   'Queries the upstream New API user endpoint with an access token and user ID',
   'Fully customizable request with an expression extractor',

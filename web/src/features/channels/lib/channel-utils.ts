@@ -21,6 +21,7 @@ import { formatTimestampToDate } from '@/lib/format'
 
 import {
   CHANNEL_STATUS_CONFIG,
+  CHANNEL_TYPE_NEW_API,
   CHANNEL_TYPES,
   MULTI_KEY_STATUS_CONFIG,
   RESPONSE_TIME_CONFIG,
@@ -28,6 +29,7 @@ import {
   TYPE_TO_KEY_PROMPT,
 } from '../constants'
 import type { Channel, ChannelSettings, ChannelOtherSettings } from '../types'
+import { parseBalanceQueryConfig } from './channel-form'
 
 // ============================================================================
 // Channel Type Utilities
@@ -536,6 +538,22 @@ export function validateChannelName(name: string): boolean {
  */
 export function validateApiKey(key: string): boolean {
   return key.trim().length > 0
+}
+
+/**
+ * Check if balance query is disabled for a channel.
+ * For New API channels, balance query mode defaults to disabled.
+ */
+export function isChannelBalanceQueryDisabled(channel: Channel): boolean {
+  if (channel.type !== CHANNEL_TYPE_NEW_API) {
+    return false
+  }
+  try {
+    const mode = parseBalanceQueryConfig(channel.settings || '{}')?.mode
+    return mode !== 'subscription' && mode !== 'user_api' && mode !== 'custom'
+  } catch {
+    return true
+  }
 }
 
 /**

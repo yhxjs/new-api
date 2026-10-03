@@ -34,7 +34,7 @@ import { formatCurrencyFromUSD } from '@/lib/currency'
 import { formatTimestampToDate } from '@/lib/format'
 
 import { getCodexUsage, updateChannelBalance } from '../../api'
-import { channelsQueryKeys } from '../../lib'
+import { channelsQueryKeys, isChannelBalanceQueryDisabled } from '../../lib'
 import { useChannels } from '../channels-provider'
 import {
   CodexUsageDialog,
@@ -93,6 +93,10 @@ export function BalanceQueryDialog(props: BalanceQueryDialogProps) {
   if (!currentRow) return null
 
   const handleQueryBalance = async () => {
+    if (isChannelBalanceQueryDisabled(currentRow)) {
+      toast.error(t('Balance query is disabled'))
+      return
+    }
     setIsQuerying(true)
     try {
       const response = await updateChannelBalance(currentRow.id)
@@ -164,6 +168,9 @@ export function BalanceQueryDialog(props: BalanceQueryDialogProps) {
   // instead of the raw expr/transport error text. The prefix is matched
   // case-sensitively because the backend emits the dto mode verbatim.
   const describeBalanceQueryError = (message: string): string => {
+    if (message === '余额查询已关闭') {
+      return t('Balance query is disabled')
+    }
     for (const mode of ['user_api', 'custom'] as const) {
       const prefix = `${mode} balance query failed: `
       if (message.startsWith(prefix)) {
@@ -235,6 +242,16 @@ export function BalanceQueryDialog(props: BalanceQueryDialogProps) {
           </>
         ) : (
           <>
+            {isChannelBalanceQueryDisabled(currentRow) && (
+              <Alert>
+                <AlertTitle>{t('Balance query is disabled')}</AlertTitle>
+                <AlertDescription>
+                  {t(
+                    'This channel has balance query disabled and will not query upstream balance.'
+                  )}
+                </AlertDescription>
+              </Alert>
+            )}
             {/* Current Balance Display */}
             <div className='bg-muted/50 rounded-lg border p-4'>
               <div className='text-muted-foreground mb-2 flex items-center gap-2 text-sm'>

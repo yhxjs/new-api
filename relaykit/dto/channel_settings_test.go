@@ -764,8 +764,10 @@ func TestChannelBalanceQueryValidate(t *testing.T) {
 }
 
 func TestChannelBalanceQueryNormalizedMode(t *testing.T) {
-	assert.Equal(t, BalanceQueryModeSubscription, (*ChannelBalanceQuery)(nil).NormalizedMode())
-	assert.Equal(t, BalanceQueryModeSubscription, (&ChannelBalanceQuery{Mode: "unknown"}).NormalizedMode())
+	assert.Equal(t, BalanceQueryModeDisabled, (*ChannelBalanceQuery)(nil).NormalizedMode())
+	assert.Equal(t, BalanceQueryModeDisabled, (&ChannelBalanceQuery{Mode: "unknown"}).NormalizedMode())
+	assert.Equal(t, BalanceQueryModeDisabled, (&ChannelBalanceQuery{Mode: BalanceQueryModeDisabled}).NormalizedMode())
+	assert.Equal(t, BalanceQueryModeSubscription, (&ChannelBalanceQuery{Mode: BalanceQueryModeSubscription}).NormalizedMode())
 	assert.Equal(t, BalanceQueryModeUserAPI, (&ChannelBalanceQuery{Mode: BalanceQueryModeUserAPI}).NormalizedMode())
 	assert.Equal(t, BalanceQueryModeCustom, (&ChannelBalanceQuery{Mode: BalanceQueryModeCustom}).NormalizedMode())
 }

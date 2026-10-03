@@ -244,6 +244,7 @@ const formatModelNames = (models: string[]): string =>
   models.map((model) => `"${model}"`).join(', ')
 
 const BALANCE_QUERY_MODE_DESCRIPTIONS = {
+  disabled: 'Do not query balance',
   subscription:
     'Queries the OpenAI-compatible dashboard billing endpoints using the channel API key',
   user_api:
@@ -255,13 +256,16 @@ function balanceQueryModeDescription(
   mode: string | undefined,
   t: (key: string) => string
 ) {
+  if (mode === 'subscription') {
+    return t(BALANCE_QUERY_MODE_DESCRIPTIONS.subscription)
+  }
   if (mode === 'user_api') {
     return t(BALANCE_QUERY_MODE_DESCRIPTIONS.user_api)
   }
   if (mode === 'custom') {
     return t(BALANCE_QUERY_MODE_DESCRIPTIONS.custom)
   }
-  return t(BALANCE_QUERY_MODE_DESCRIPTIONS.subscription)
+  return t(BALANCE_QUERY_MODE_DESCRIPTIONS.disabled)
 }
 
 const MODEL_MAPPING_PREVIEW_FALLBACK: Array<{
@@ -1113,7 +1117,7 @@ export function ChannelMutateDrawer({
   const balanceQueryConfigured = Boolean(
     currentType === CHANNEL_TYPE_NEW_API &&
     currentBalanceQueryMode &&
-    currentBalanceQueryMode !== 'subscription'
+    currentBalanceQueryMode !== 'disabled'
   )
   const advancedConfigured = Boolean(
     routingStrategyConfigured ||
@@ -5047,6 +5051,10 @@ export function ChannelMutateDrawer({
                                     <Select
                                       items={[
                                         {
+                                          value: 'disabled',
+                                          label: t('Closed'),
+                                        },
+                                        {
                                           value: 'subscription',
                                           label: t('Subscription'),
                                         },
@@ -5059,7 +5067,7 @@ export function ChannelMutateDrawer({
                                           label: t('Custom'),
                                         },
                                       ]}
-                                      value={field.value || 'subscription'}
+                                      value={field.value || 'disabled'}
                                       onValueChange={field.onChange}
                                     >
                                       <FormControl>
@@ -5071,6 +5079,9 @@ export function ChannelMutateDrawer({
                                         alignItemWithTrigger={false}
                                       >
                                         <SelectGroup>
+                                          <SelectItem value='disabled'>
+                                            {t('Closed')}
+                                          </SelectItem>
                                           <SelectItem value='subscription'>
                                             {t('Subscription')}
                                           </SelectItem>

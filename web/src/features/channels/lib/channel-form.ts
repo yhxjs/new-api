@@ -344,7 +344,7 @@ export const channelFormSchema = z
     upstream_model_update_ignored_models: z.string().optional(),
     // Balance query settings (stored in settings JSON, New API channels)
     balance_query_mode: z
-      .enum(['subscription', 'user_api', 'custom'])
+      .enum(['disabled', 'subscription', 'user_api', 'custom'])
       .optional(),
     balance_query_access_token: z.string().optional(),
     balance_query_user_id: z.string().optional(),
@@ -655,7 +655,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   upstream_model_update_ignored_models: '',
   advanced_custom: '',
   // Balance query settings
-  balance_query_mode: 'subscription',
+  balance_query_mode: 'disabled',
   balance_query_access_token: '',
   balance_query_user_id: '',
   balance_query_quota_per_unit: undefined,
@@ -729,7 +729,7 @@ function settingsObjectMembers(source: string) {
   return members
 }
 
-function parseBalanceQueryConfig(
+export function parseBalanceQueryConfig(
   settings: string
 ): Record<string, unknown> | undefined {
   let query: Record<string, unknown> | undefined
@@ -773,8 +773,12 @@ function parseBalanceQueryConfig(
 
 function balanceQueryFormDefaults(query?: Record<string, unknown>) {
   const config = query as ChannelBalanceQueryConfig | undefined
-  let mode: 'subscription' | 'user_api' | 'custom' = 'subscription'
-  if (config?.mode === 'user_api' || config?.mode === 'custom') {
+  let mode: 'disabled' | 'subscription' | 'user_api' | 'custom' = 'disabled'
+  if (
+    config?.mode === 'subscription' ||
+    config?.mode === 'user_api' ||
+    config?.mode === 'custom'
+  ) {
     mode = config.mode
   }
   return {
@@ -1125,7 +1129,7 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
 
   // Balance query settings for New API channels
   if (formData.type === CHANNEL_TYPE_NEW_API) {
-    const mode = formData.balance_query_mode || 'subscription'
+    const mode = formData.balance_query_mode || 'disabled'
     const balanceQuery: Record<string, unknown> = { mode }
     if (mode === 'user_api') {
       const accessToken = formData.balance_query_access_token?.trim() || ''
@@ -1163,15 +1167,14 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
       if (body) balanceQuery.body = body
       if (extract) balanceQuery.extract = extract
     }
-    // Skip writing a bare subscription default: legacy channels never stored
-    // balance_query settings, and injecting {"mode":"subscription"} would
+    // Skip writing a bare disabled default: legacy channels never stored
+    // balance_query settings, and injecting {"mode":"disabled"} would
     // make every edit look like a settings change to the backend's
     // sensitivity check. The backend treats the default the same way when
     // comparing settings, so both sides agree the default is "not stored".
     const unchanged = BALANCE_QUERY_FORM_FIELDS.every((field) => {
       const value =
-        formData[field] ??
-        (field === 'balance_query_mode' ? 'subscription' : '')
+        formData[field] ?? (field === 'balance_query_mode' ? 'disabled' : '')
       return value === (originalBalanceQuery[field] ?? '')
     })
     for (const name of Object.keys(settingsObj)) {
@@ -1179,10 +1182,7 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
         delete settingsObj[name]
       }
     }
-    if (
-      !unchanged &&
-      (mode !== 'subscription' || balanceQueryMembers.length > 0)
-    ) {
+    if (!unchanged && (mode !== 'disabled' || balanceQueryMembers.length > 0)) {
       settingsObj.balance_query = balanceQuery
     }
     if (!unchanged) balanceQueryMembers = []

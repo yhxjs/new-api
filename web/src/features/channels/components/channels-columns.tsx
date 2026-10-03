@@ -72,6 +72,7 @@ import {
   handleUpdateChannelField,
   handleUpdateTagField,
   createChannelFieldUpdateScheduler,
+  isChannelBalanceQueryDisabled,
   isTagAggregateRow,
   type TagRow,
 } from '../lib'
@@ -424,6 +425,10 @@ export function BalanceCell({ channel }: { channel: Channel }) {
 
   const handleClickUpdate = async () => {
     if (isUpdating) {
+      return
+    }
+    if (isChannelBalanceQueryDisabled(channel)) {
+      toast.error(t('Balance query is disabled'))
       return
     }
 

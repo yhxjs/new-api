@@ -20,6 +20,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useEffect } from 'react'
+import { toast } from 'sonner'
 import { afterEach, expect, test, vi } from 'vitest'
 
 import { api } from '@/lib/api'
@@ -55,6 +56,7 @@ test('a successful manual balance refresh removes an earlier failure warning', a
     response_time: 0,
     balance: 7,
     balance_updated_time: 1,
+    settings: JSON.stringify({ balance_query: { mode: 'subscription' } }),
     channel_info: { balance_query_last_failed_time: 2 },
   })
   queryClient = new QueryClient({
@@ -79,3 +81,40 @@ test('a successful manual balance refresh removes an earlier failure warning', a
 
   await waitFor(() => expect(warning).not.toBeInTheDocument())
 })
+
+test.each([undefined, 'null'])(
+  'clicking update balance with settings %s shows disabled error without calling api',
+  async (settings) => {
+    const channel = channelSchema.parse({
+      id: 2,
+      type: CHANNEL_TYPE_NEW_API,
+      key: '',
+      status: 1,
+      name: 'Disabled upstream',
+      created_time: 0,
+      test_time: 0,
+      response_time: 0,
+      balance: 5,
+      balance_updated_time: 1,
+      settings,
+    })
+    queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    })
+    const getSpy = vi.spyOn(api, 'get')
+    const toastErrorSpy = vi.spyOn(toast, 'error')
+    const user = userEvent.setup()
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ChannelsProvider>
+          <BalanceDialogFixture channel={channel} />
+        </ChannelsProvider>
+      </QueryClientProvider>
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Update Balance' }))
+
+    expect(toastErrorSpy).toHaveBeenCalledWith('Balance query is disabled')
+    expect(getSpy).not.toHaveBeenCalled()
+  }
+)

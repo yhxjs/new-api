@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -291,9 +293,29 @@ func TestFetchCustomTemplateBalanceRedactsPercentEncodedKey(t *testing.T) {
 	assert.NotContains(t, err.Error(), "sk%20key%2F%26")
 }
 
+func TestUpdateNewAPIChannelBalanceDisabledDefault(t *testing.T) {
+	setupBalanceTestDB(t)
+	// When balance query is nil (or explicitly disabled), it defaults to disabled mode
+	channelNil := newNewAPIBalanceChannel(t, "https://upstream.example", nil)
+	handled, _, err := updateNewAPIChannelBalance(channelNil)
+	require.Error(t, err)
+	assert.Equal(t, "余额查询已关闭", err.Error())
+	assert.True(t, handled)
+
+	channelDisabled := newNewAPIBalanceChannel(t, "https://upstream.example", &dto.ChannelBalanceQuery{
+		Mode: dto.BalanceQueryModeDisabled,
+	})
+	handled, _, err = updateNewAPIChannelBalance(channelDisabled)
+	require.Error(t, err)
+	assert.Equal(t, "余额查询已关闭", err.Error())
+	assert.True(t, handled)
+}
+
 func TestUpdateNewAPIChannelBalanceSubscriptionFlowsThrough(t *testing.T) {
 	setupBalanceTestDB(t)
-	channel := newNewAPIBalanceChannel(t, "https://upstream.example", nil)
+	channel := newNewAPIBalanceChannel(t, "https://upstream.example", &dto.ChannelBalanceQuery{
+		Mode: dto.BalanceQueryModeSubscription,
+	})
 
 	handled, _, err := updateNewAPIChannelBalance(channel)
 	require.NoError(t, err)
@@ -323,7 +345,9 @@ func TestUpdateNewAPIChannelBalanceSubscriptionTimesOut(t *testing.T) {
 	defer server.Close()
 	defer close(release)
 
-	channel := newNewAPIBalanceChannel(t, server.URL, nil)
+	channel := newNewAPIBalanceChannel(t, server.URL, &dto.ChannelBalanceQuery{
+		Mode: dto.BalanceQueryModeSubscription,
+	})
 	start := time.Now()
 	_, err := updateStandardChannelBalance(channel)
 	require.Error(t, err)
@@ -533,14 +557,14 @@ func TestBalanceQueryEqualsIgnoringAccessToken(t *testing.T) {
 
 func TestLegacyNewAPIDefaultBalanceQueryIsNotSensitive(t *testing.T) {
 	// A legacy New API channel stored no balance_query at all. A client that
-	// injects the bare subscription default into the settings payload must
+	// injects the bare disabled default into the settings payload must
 	// not turn an otherwise-unrelated edit (e.g. rename) into a sensitive
 	// settings change requiring ChannelSensitiveWrite.
 	origin := &model.Channel{Type: constant.ChannelTypeNewAPI}
 	origin.OtherSettings = `{"openrouter_enterprise":false}`
 
 	injectedDefault := &model.Channel{Type: constant.ChannelTypeNewAPI}
-	injectedDefault.OtherSettings = `{"openrouter_enterprise":false,"balance_query":{"mode":"subscription"}}`
+	injectedDefault.OtherSettings = `{"openrouter_enterprise":false,"balance_query":{"mode":"disabled"}}`
 	assert.True(t, injectedDefault.OtherSettingsEqualIgnoringBalanceQueryToken(origin))
 	assert.False(t, channelHasSensitiveChanges(
 		&PatchChannel{Channel: *injectedDefault},
@@ -551,7 +575,7 @@ func TestLegacyNewAPIDefaultBalanceQueryIsNotSensitive(t *testing.T) {
 	// The same holds when the stored side carries the default and the
 	// incoming side drops it entirely.
 	storedDefault := &model.Channel{Type: constant.ChannelTypeNewAPI}
-	storedDefault.OtherSettings = `{"balance_query":{"mode":"subscription"}}`
+	storedDefault.OtherSettings = `{"balance_query":{"mode":"disabled"}}`
 	noBalanceQuery := &model.Channel{Type: constant.ChannelTypeNewAPI}
 	noBalanceQuery.OtherSettings = `{}`
 	assert.True(t, noBalanceQuery.OtherSettingsEqualIgnoringBalanceQueryToken(storedDefault))
@@ -936,4 +960,47 @@ func TestFetchCustomTemplateBalanceSlowUpstreamTimesOut(t *testing.T) {
 	require.Error(t, err)
 	assert.Less(t, time.Since(start), 5*time.Second,
 		"a hanging balance endpoint must fail at the request timeout, not wait indefinitely")
+}
+
+func TestUpdateChannelBalanceDisabledReturnsMessage(t *testing.T) {
+	setupBalanceTestDB(t)
+	channel := newNewAPIBalanceChannel(t, "https://upstream.example", nil)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Params = gin.Params{{Key: "id", Value: strconv.Itoa(channel.Id)}}
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/channel/update_balance/"+strconv.Itoa(channel.Id), nil)
+
+	UpdateChannelBalance(ctx)
+
+	var response struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.False(t, response.Success)
+	assert.Equal(t, "余额查询已关闭", response.Message)
+}
+
+func TestUpdateAllChannelsBalanceSkipsDisabledNewAPI(t *testing.T) {
+	setupBalanceTestDB(t)
+	previousInterval := common.RequestInterval
+	common.RequestInterval = 0
+	t.Cleanup(func() {
+		common.RequestInterval = previousInterval
+	})
+
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	channel := newNewAPIBalanceChannel(t, server.URL, nil)
+	channel.Status = common.ChannelStatusEnabled
+	require.NoError(t, model.DB.Save(channel).Error)
+
+	require.NoError(t, updateAllChannelsBalance())
+	assert.False(t, called, "disabled New API channel balance queries must not reach the upstream")
 }
