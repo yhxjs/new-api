@@ -60,6 +60,30 @@ const defaults: SettingsDefaults = {
   'degradation_setting.targets': '[]',
   'degradation_setting.probes': '[]',
 }
+
+const mockChannels = [
+  {
+    id: 1,
+    name: 'OpenAI Primary',
+    group: 'default',
+    models: 'o3,gemini-2.5-pro',
+    status: 1,
+  },
+  {
+    id: 2,
+    name: 'OpenAI Secondary',
+    group: 'default',
+    models: 'gpt-4o-mini',
+    status: 1,
+  },
+  {
+    id: 3,
+    name: 'OpenAI Backup',
+    group: 'default',
+    models: 'gpt-4o',
+    status: 1,
+  },
+]
 const regexProbe: ProbeConfig = {
   id: 'comma-probe',
   name: 'Comma response',
@@ -121,9 +145,23 @@ function mockPersistedSettings(initialValues = defaults) {
     serverValues[request.key] = request.value
     return { data: { success: true, message: '' } }
   }
-  vi.spyOn(api, 'get').mockImplementation(readOptions)
+  const mockGet = async (url: string) => {
+    if (typeof url === 'string' && url.includes('/api/channel/search')) {
+      return {
+        data: {
+          success: true,
+          data: {
+            items: mockChannels,
+            total: mockChannels.length,
+          },
+        },
+      }
+    }
+    return readOptions()
+  }
+  vi.spyOn(api, 'get').mockImplementation(mockGet)
   vi.mocked(api.put).mockImplementation(persistOption)
-  return { serverValues, readOptions, persistOption }
+  return { serverValues, readOptions, persistOption, mockGet }
 }
 
 function savedOptions(): Record<string, string | boolean | number> {
@@ -145,6 +183,20 @@ describe('degradation settings persistence', () => {
     })
     actionsContainer = document.createElement('div')
     document.body.append(actionsContainer)
+    vi.spyOn(api, 'get').mockImplementation(async (url: string) => {
+      if (typeof url === 'string' && url.includes('/api/channel/search')) {
+        return {
+          data: {
+            success: true,
+            data: {
+              items: mockChannels,
+              total: mockChannels.length,
+            },
+          },
+        }
+      }
+      return { data: { success: true, data: [] } }
+    })
     vi.spyOn(api, 'put').mockResolvedValue({
       data: { success: true, message: '' },
       status: 200,
@@ -418,11 +470,9 @@ describe('degradation settings persistence', () => {
         const dialog = within(
           screen.getByRole('dialog', { name: 'Add Target Channel' })
         )
-        await user.type(dialog.getByRole('spinbutton'), '3')
-        await user.type(
-          dialog.getByPlaceholderText('gpt-4o, claude-3-7-sonnet, deepseek-r1'),
-          'gpt-4o'
-        )
+        await user.click(dialog.getByRole('combobox'))
+        await user.click(screen.getByRole('option', { name: /OpenAI Backup/i }))
+        await user.click(dialog.getByRole('checkbox', { name: 'gpt-4o' }))
         await user.click(dialog.getByRole('button', { name: 'Add Target' }))
       }
       releaseWrite()
@@ -794,7 +844,7 @@ describe('degradation settings persistence', () => {
 
   test('an edited JSON draft retries a failed settings read and blocks writes until the latest configuration loads', async () => {
     const user = userEvent.setup()
-    const { serverValues, readOptions } = mockPersistedSettings({
+    const { serverValues, mockGet } = mockPersistedSettings({
       ...defaults,
       'degradation_setting.probes': JSON.stringify([regexProbe]),
     })
@@ -825,7 +875,7 @@ describe('degradation settings persistence', () => {
     expect(
       JSON.parse(String(serverValues['degradation_setting.probes']))
     ).toEqual([regexProbe])
-    vi.mocked(api.get).mockImplementation(readOptions)
+    vi.mocked(api.get).mockImplementation(mockGet)
     await user.click(screen.getByRole('button', { name: 'Save Changes' }))
     await waitFor(() => {
       expect(successToast).toHaveBeenCalledWith('Settings updated successfully')
@@ -932,12 +982,10 @@ describe('degradation settings persistence', () => {
     const targetDialog = within(
       screen.getByRole('dialog', { name: 'Add Target Channel' })
     )
-    await user.type(targetDialog.getByRole('spinbutton'), '2')
-    await user.type(
-      targetDialog.getByPlaceholderText(
-        'gpt-4o, claude-3-7-sonnet, deepseek-r1'
-      ),
-      'gpt-4o-mini'
+    await user.click(targetDialog.getByRole('combobox'))
+    await user.click(screen.getByRole('option', { name: /OpenAI Secondary/i }))
+    await user.click(
+      targetDialog.getByRole('checkbox', { name: 'gpt-4o-mini' })
     )
     await user.click(targetDialog.getByRole('button', { name: 'Add Target' }))
     await user.click(
@@ -983,6 +1031,7 @@ describe('degradation settings persistence', () => {
       },
       {
         channel_id: 2,
+        channel_name: 'OpenAI Secondary',
         models: ['gpt-4o-mini'],
         bindings: [{ model_name: 'gpt-4o-mini', enabled: true }],
       },
@@ -1170,6 +1219,7 @@ describe('degradation settings persistence', () => {
     // Keep the production api.get wrapper, interceptors and serialization;
     // only the network transport is controlled by the fixture.
     vi.mocked(api.put).mockRestore()
+    vi.mocked(api.get).mockRestore()
     api.defaults.adapter = adapter
     const successToast = vi.spyOn(toast, 'success')
     try {
@@ -1224,11 +1274,9 @@ describe('degradation settings persistence', () => {
     const dialog = within(
       screen.getByRole('dialog', { name: 'Add Target Channel' })
     )
-    await user.type(dialog.getByRole('spinbutton'), '1')
-    await user.type(
-      dialog.getByPlaceholderText('gpt-4o, claude-3-7-sonnet, deepseek-r1'),
-      'o3, gemini-2.5-pro'
-    )
+    await user.click(dialog.getByRole('combobox'))
+    await user.click(screen.getByRole('option', { name: /OpenAI Primary/i }))
+    await user.click(dialog.getByRole('button', { name: 'Select all' }))
     await user.click(dialog.getByRole('button', { name: 'Add Target' }))
     await user.click(screen.getByRole('button', { name: 'Save Changes' }))
 
@@ -1238,6 +1286,7 @@ describe('degradation settings persistence', () => {
       ).toEqual([
         {
           channel_id: 1,
+          channel_name: 'OpenAI Primary',
           models: ['o3', 'gemini-2.5-pro'],
           bindings: [
             { model_name: 'o3', enabled: true },

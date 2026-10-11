@@ -72,6 +72,7 @@ import { useUpdateOption } from '../hooks/use-update-option'
 import type { SystemOptionsResponse } from '../types'
 import { safeNumberFieldProps } from '../utils/numeric-field'
 import { ModelBindingDialog } from './degradation-binding-dialog'
+import { AddTargetDialog } from './degradation-target-dialog'
 
 export type ProbeConfig = {
   id: string
@@ -229,9 +230,6 @@ export function DegradationCheckSection(props: DegradationCheckSectionProps) {
   } | null>(null)
 
   const [targetModalOpen, setTargetModalOpen] = useState(false)
-  const [newTargetChannelId, setNewTargetChannelId] = useState<number | ''>('')
-  const [newTargetChannelName, setNewTargetChannelName] = useState('')
-  const [newTargetModels, setNewTargetModels] = useState('')
 
   const [bindingModalOpen, setBindingModalOpen] = useState(false)
   const [activeTargetIndex, setActiveTargetIndex] = useState<number>(-1)
@@ -288,51 +286,15 @@ export function DegradationCheckSection(props: DegradationCheckSectionProps) {
     setProbePendingDelete(null)
   }, [probes, probePendingDelete, setFieldValue])
 
-  const handleAddTarget = useCallback(() => {
-    if (!newTargetChannelId) {
-      toast.error(t('Channel ID is required'))
-      return
-    }
-    const channelIdNum = Number(newTargetChannelId)
-    if (!Number.isInteger(channelIdNum) || channelIdNum <= 0) {
-      toast.error(t('Channel ID must be a positive integer'))
-      return
-    }
-    if (targets.some((target) => target.channel_id === channelIdNum)) {
-      toast.error(t('This channel is already being monitored'))
-      return
-    }
-    const modelsList = newTargetModels
-      .split(/[\n,]/)
-      .map((m) => m.trim())
-      .filter(Boolean)
-
-    const newTarget: DetectionTarget = {
-      channel_id: channelIdNum,
-      channel_name: newTargetChannelName.trim() || undefined,
-      models: modelsList,
-      bindings: modelsList.map((m) => ({
-        model_name: m,
-        enabled: true,
-      })),
-    }
-
-    const current = [...targets, newTarget]
-    setFieldValue('degradation_setting.targets', JSON.stringify(current), {
-      shouldDirty: true,
-    })
-    setTargetModalOpen(false)
-    setNewTargetChannelId('')
-    setNewTargetChannelName('')
-    setNewTargetModels('')
-  }, [
-    newTargetChannelId,
-    newTargetChannelName,
-    newTargetModels,
-    setFieldValue,
-    t,
-    targets,
-  ])
+  const handleAddTarget = useCallback(
+    (newTarget: DetectionTarget) => {
+      const current = [...targets, newTarget]
+      setFieldValue('degradation_setting.targets', JSON.stringify(current), {
+        shouldDirty: true,
+      })
+    },
+    [setFieldValue, targets]
+  )
 
   const handleDeleteTarget = useCallback(
     (targetIdx: number) => {
@@ -1069,66 +1031,12 @@ export function DegradationCheckSection(props: DegradationCheckSectionProps) {
       />
 
       {/* 添加监测渠道弹窗 */}
-      <Dialog open={targetModalOpen} onOpenChange={setTargetModalOpen}>
-        <DialogContent className='max-w-md'>
-          <DialogHeader>
-            <DialogTitle>{t('Add Target Channel')}</DialogTitle>
-          </DialogHeader>
-          <div className='space-y-3 py-2 text-xs'>
-            <div>
-              <Label>{t('Channel ID')}</Label>
-              <Input
-                type='number'
-                className='mt-1 text-xs'
-                value={newTargetChannelId}
-                onChange={(e) =>
-                  setNewTargetChannelId(
-                    e.target.value ? Number(e.target.value) : ''
-                  )
-                }
-                placeholder={t('e.g. 1')}
-                required
-              />
-            </div>
-            <div>
-              <Label>{t('Channel Name (Optional)')}</Label>
-              <Input
-                className='mt-1 text-xs'
-                value={newTargetChannelName}
-                onChange={(e) => setNewTargetChannelName(e.target.value)}
-                placeholder={t('e.g. Official OpenAI Main')}
-              />
-            </div>
-            <div>
-              <Label>
-                {t('Monitored Models (Comma or newline separated)')}
-              </Label>
-              <Textarea
-                className='mt-1 text-xs'
-                rows={3}
-                value={newTargetModels}
-                onChange={(e) => setNewTargetModels(e.target.value)}
-                placeholder='gpt-4o, claude-3-7-sonnet, deepseek-r1'
-              />
-              <p className='text-muted-foreground mt-1 text-[11px]'>
-                {t('Leave empty to probe all models on this channel.')}
-              </p>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button
-              type='button'
-              variant='outline'
-              onClick={() => setTargetModalOpen(false)}
-            >
-              {t('Cancel')}
-            </Button>
-            <Button type='button' onClick={handleAddTarget}>
-              {t('Add Target')}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <AddTargetDialog
+        open={targetModalOpen}
+        onOpenChange={setTargetModalOpen}
+        existingChannelIds={targets.map((t) => t.channel_id)}
+        onAddTarget={handleAddTarget}
+      />
 
       {/* 模型探针与思考配置弹窗 */}
       <ModelBindingDialog
