@@ -140,7 +140,7 @@ test.each([
     overviewResult = response
     const user = userEvent.setup()
     await renderPage()
-    await screen.findByText('unexecuted-model')
+    await screen.findAllByText('unexecuted-model')
 
     await user.click(screen.getByRole('button', { name: filter }))
 
@@ -166,12 +166,12 @@ test('an executed model stays critical when another node has no executions', asy
   overviewResult = response
   const user = userEvent.setup()
   await renderPage()
-  await screen.findByText('unexecuted-model')
+  await screen.findAllByText('unexecuted-model')
 
   await user.click(screen.getByRole('button', { name: 'Error' }))
 
-  expect(screen.getByText('unexecuted-model')).toBeVisible()
-  expect(screen.getByText('60.0%')).toBeVisible()
+  expect(screen.getAllByText('unexecuted-model')[0]).toBeVisible()
+  expect(screen.getAllByText('60.0%')[0]).toBeVisible()
 })
 
 test.each([
@@ -193,7 +193,7 @@ test.each([
     overviewResult = overview()
     await user.click(screen.getByRole('button', { name: 'Retry' }))
 
-    expect(await screen.findByText('unexecuted-model')).toBeVisible()
+    expect((await screen.findAllByText('unexecuted-model'))[0]).toBeVisible()
     expect(screen.queryByRole('alert')).toBeNull()
   }
 )
@@ -206,12 +206,12 @@ test.each([
   async (_, failure) => {
     const user = userEvent.setup()
     await renderPage()
-    await screen.findByText('unexecuted-model')
+    await screen.findAllByText('unexecuted-model')
     overviewResult = failure
 
     const header = screen
       .getByRole('heading', {
-        name: 'Model Health & Degradation Monitor',
+        name: 'Degradation Check',
       })
       .closest('header')
     expect(header).not.toBeNull()
@@ -220,7 +220,7 @@ test.each([
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Failed to refresh degradation data. Showing the last successful results.'
     )
-    expect(screen.getByText('unexecuted-model')).toBeVisible()
+    expect(screen.getAllByText('unexecuted-model')[0]).toBeVisible()
     overviewResult = overview()
     await user.click(screen.getByRole('button', { name: 'Retry' }))
     await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())

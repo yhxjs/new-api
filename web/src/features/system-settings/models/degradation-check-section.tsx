@@ -57,6 +57,7 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { getChannel } from '@/features/channels/api'
 import { channelsQueryKeys } from '@/features/channels/lib/channel-actions'
+import { localizeDegradationMessage } from '@/features/degradation-check/lib/degradation-messages'
 import { api } from '@/lib/api'
 
 import {
@@ -364,15 +365,18 @@ export function DegradationCheckSection(props: DegradationCheckSectionProps) {
       setRunningAll(true)
       const res = await api.post('/api/degradation/run')
       if (res.data?.success) {
-        toast.success(
-          res.data?.message || t('Degradation check triggered successfully')
-        )
+        toast.success(t('Degradation check triggered successfully'))
       } else {
-        toast.error(res.data?.message || t('Failed to trigger check'))
+        toast.error(
+          localizeDegradationMessage(
+            res.data?.message,
+            t('Failed to trigger check')
+          )
+        )
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
-      toast.error(msg || t('Failed to trigger check'))
+      toast.error(localizeDegradationMessage(msg, t('Failed to trigger check')))
     } finally {
       setRunningAll(false)
     }
@@ -387,15 +391,18 @@ export function DegradationCheckSection(props: DegradationCheckSectionProps) {
         model_name: modelName,
       })
       if (res.data?.success) {
-        toast.success(
-          res.data?.message || t('Target probe queued successfully')
-        )
+        toast.success(t('Target probe queued successfully'))
       } else {
-        toast.error(res.data?.message || t('Failed to test target'))
+        toast.error(
+          localizeDegradationMessage(
+            res.data?.message,
+            t('Failed to test target')
+          )
+        )
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
-      toast.error(msg || t('Failed to test target'))
+      toast.error(localizeDegradationMessage(msg, t('Failed to test target')))
     } finally {
       setTestingModelKey(null)
     }
@@ -1186,53 +1193,6 @@ function ProbeEditForm(props: {
 
       <div className='grid grid-cols-2 gap-3'>
         <div>
-          <Label htmlFor={`${formId}-keywords`}>
-            {matchRule === 'regex'
-              ? t('Expected Regular Expressions (one per line)')
-              : t('Expected Keywords (comma-separated)')}
-          </Label>
-          {matchRule === 'regex' ? (
-            <>
-              <Textarea
-                id={`${formId}-keywords`}
-                value={keywords}
-                onChange={(e) => setKeywords(e.target.value)}
-                className='mt-1 text-xs'
-                rows={3}
-                placeholder={'^a,b$\n^c,d$'}
-              />
-              <p className='text-muted-foreground mt-1 text-[11px]'>
-                {t(
-                  'Enter one regular expression per line. Commas are preserved.'
-                )}
-              </p>
-            </>
-          ) : (
-            <Input
-              id={`${formId}-keywords`}
-              value={keywords}
-              onChange={(e) => setKeywords(e.target.value)}
-              className='mt-1 text-xs'
-              placeholder={t('wordA, wordB')}
-            />
-          )}
-        </div>
-        <div>
-          <Label htmlFor={`${formId}-exclude-words`}>
-            {t('Exclude Words (comma-separated)')}
-          </Label>
-          <Input
-            id={`${formId}-exclude-words`}
-            value={excludeWords}
-            onChange={(e) => setExcludeWords(e.target.value)}
-            className='mt-1 text-xs'
-            placeholder={t('sorry, cannot')}
-          />
-        </div>
-      </div>
-
-      <div className='grid grid-cols-2 gap-3'>
-        <div>
           <Label htmlFor={`${formId}-match-rule`}>{t('Match Rule')}</Label>
           <Select
             items={matchRuleOptions}
@@ -1257,6 +1217,54 @@ function ProbeEditForm(props: {
           </Select>
         </div>
         <div>
+          <Label htmlFor={`${formId}-exclude-words`}>
+            {t('Exclude Words (comma-separated)')}
+          </Label>
+          <Input
+            id={`${formId}-exclude-words`}
+            value={excludeWords}
+            onChange={(e) => setExcludeWords(e.target.value)}
+            className='mt-1 text-xs'
+            placeholder={t('sorry, cannot')}
+          />
+        </div>
+      </div>
+
+      <div>
+        <Label htmlFor={`${formId}-keywords`}>
+          {matchRule === 'regex'
+            ? t('Expected Regular Expressions (one per line)')
+            : t('Expected Keywords (comma-separated)')}
+        </Label>
+        {matchRule === 'regex' ? (
+          <>
+            <Textarea
+              id={`${formId}-keywords`}
+              value={keywords}
+              onChange={(e) => setKeywords(e.target.value)}
+              className='mt-1 text-xs'
+              rows={3}
+              placeholder={'^a,b$\n^c,d$'}
+            />
+            <p className='text-muted-foreground mt-1 text-[11px]'>
+              {t(
+                'Enter one regular expression per line. Commas are preserved.'
+              )}
+            </p>
+          </>
+        ) : (
+          <Input
+            id={`${formId}-keywords`}
+            value={keywords}
+            onChange={(e) => setKeywords(e.target.value)}
+            className='mt-1 text-xs'
+            placeholder={t('wordA, wordB')}
+          />
+        )}
+      </div>
+
+      <div className='grid grid-cols-2 gap-3'>
+        <div>
           <Label htmlFor={`${formId}-max-tokens`}>{t('Max Tokens')}</Label>
           <Input
             id={`${formId}-max-tokens`}
@@ -1270,9 +1278,6 @@ function ProbeEditForm(props: {
             max={1024}
           />
         </div>
-      </div>
-
-      <div className='grid grid-cols-2 items-center gap-3'>
         <div>
           <Label htmlFor={`${formId}-temperature`}>{t('Temperature')}</Label>
           <Input
@@ -1287,16 +1292,20 @@ function ProbeEditForm(props: {
             placeholder='0'
           />
         </div>
-        <div className='flex items-center gap-2 pt-4'>
-          <Checkbox
-            id={`${formId}-case-sensitive`}
-            checked={caseSensitive}
-            onCheckedChange={(c) => setCaseSensitive(c === true)}
-          />
-          <Label htmlFor={`${formId}-case-sensitive`}>
-            {t('Case Sensitive')}
-          </Label>
-        </div>
+      </div>
+
+      <div className='flex items-center gap-2 pt-1'>
+        <Checkbox
+          id={`${formId}-case-sensitive`}
+          checked={caseSensitive}
+          onCheckedChange={(c) => setCaseSensitive(c === true)}
+        />
+        <Label
+          htmlFor={`${formId}-case-sensitive`}
+          className='cursor-pointer text-xs font-normal'
+        >
+          {t('Case Sensitive')}
+        </Label>
       </div>
 
       <DialogFooter className='pt-3'>

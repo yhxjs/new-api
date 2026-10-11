@@ -148,4 +148,36 @@ describe('probe form accessibility', () => {
     await user.keyboard(' ')
     expect(checkbox).not.toBeChecked()
   })
+
+  test('probe form organizes controls into balanced pairs with full-width keywords input', async () => {
+    const user = userEvent.setup()
+    await renderSettings()
+    await user.click(screen.getByRole('button', { name: 'Add Custom Probe' }))
+    const dialog = within(screen.getByRole('dialog', { name: 'Create Probe' }))
+
+    const matchRuleSelect = dialog.getByRole('combobox', { name: 'Match Rule' })
+    const excludeWordsInput = dialog.getByRole('textbox', {
+      name: 'Exclude Words (comma-separated)',
+    })
+    const keywordsInput = dialog.getByRole('textbox', {
+      name: 'Expected Keywords (comma-separated)',
+    })
+    const maxTokensInput = dialog.getByRole('spinbutton', {
+      name: 'Max Tokens',
+    })
+    const temperatureInput = dialog.getByRole('spinbutton', {
+      name: 'Temperature',
+    })
+
+    const ruleContainer = matchRuleSelect.closest('.grid')
+    expect(ruleContainer).not.toBeNull()
+    expect(ruleContainer).toBe(excludeWordsInput.closest('.grid'))
+
+    expect(keywordsInput.closest('form > .grid')).toBeNull()
+
+    const paramsContainer = maxTokensInput.closest('.grid')
+    expect(paramsContainer).not.toBeNull()
+    expect(paramsContainer).toBe(temperatureInput.closest('.grid'))
+    expect(paramsContainer).not.toBe(ruleContainer)
+  })
 })

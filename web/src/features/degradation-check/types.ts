@@ -31,6 +31,7 @@ export type DegradationProbeTimeline = {
   probe_id: string
   probe_name: string
   pass_rate: number
+  total_executions?: number
   slots: number[] // 24 slots: 1=passed, 2=mismatched, 3=error, 4=timeout, 0=no_data
 }
 
@@ -42,6 +43,7 @@ export type DegradationSnapshotItem = {
   token_count: number
   reasoning_tokens?: number
   reasoning_effort?: string
+  reasoning_time_ms?: number
   detail?: string
 }
 

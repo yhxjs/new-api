@@ -31,10 +31,11 @@ type DegradationOverviewStats struct {
 }
 
 type DegradationProbeTimeline struct {
-	ProbeID   string  `json:"probe_id"`
-	ProbeName string  `json:"probe_name"`
-	PassRate  float64 `json:"pass_rate"`
-	Slots     []int   `json:"slots"` // 24 个状态格: 1=通过, 2=答案不符, 3=错误, 4=超时, 0=无数据
+	ProbeID         string  `json:"probe_id"`
+	ProbeName       string  `json:"probe_name"`
+	PassRate        float64 `json:"pass_rate"`
+	TotalExecutions int64   `json:"total_executions"`
+	Slots           []int   `json:"slots"` // 24 个状态格: 1=通过, 2=答案不符, 3=错误, 4=超时, 0=无数据
 }
 
 type DegradationSnapshotItem struct {
@@ -318,11 +319,17 @@ func computeDegradationOverview() *DegradationOverviewResponse {
 					slots = s
 				}
 
+				var pTotal int64
+				if pStat != nil {
+					pTotal = pStat.total
+				}
+
 				probeTimelines = append(probeTimelines, DegradationProbeTimeline{
-					ProbeID:   p.ID,
-					ProbeName: p.Name,
-					PassRate:  pPassRate,
-					Slots:     slots[:],
+					ProbeID:         p.ID,
+					ProbeName:       p.Name,
+					PassRate:        pPassRate,
+					TotalExecutions: pTotal,
+					Slots:           slots[:],
 				})
 			}
 

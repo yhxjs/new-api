@@ -63,6 +63,7 @@ import {
 } from './components/channel-model-card'
 import { StatusSummary } from './components/status-summary'
 import { DEGRADED_PASS_RATE, HEALTHY_PASS_RATE } from './constants'
+import { localizeDegradationMessage } from './lib/degradation-messages'
 import type {
   DegradationModelItem,
   DegradationSortOption,
@@ -199,14 +200,16 @@ export function DegradationCheckPage() {
       setTriggering(true)
       const res = await triggerDegradationRun()
       if (res.success) {
-        toast.success(res.message || t('Degradation test triggered'))
+        toast.success(t('Degradation test triggered'))
         overviewQuery.refetch()
       } else {
-        toast.error(res.message || t('Failed to trigger test'))
+        toast.error(
+          localizeDegradationMessage(res.message, t('Failed to trigger test'))
+        )
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
-      toast.error(msg || t('Failed to trigger test'))
+      toast.error(localizeDegradationMessage(msg, t('Failed to trigger test')))
     } finally {
       setTriggering(false)
     }
@@ -220,7 +223,7 @@ export function DegradationCheckPage() {
           <div className='min-w-0'>
             <div className='flex items-center gap-2'>
               <h1 className='text-foreground text-2xl font-bold tracking-tight sm:text-3xl'>
-                {t('Model Health & Degradation Monitor')}
+                {t('Degradation Check')}
               </h1>
               <span className='inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-xs font-medium text-emerald-600 dark:text-emerald-400'>
                 <ShieldCheck className='h-3.5 w-3.5' />
