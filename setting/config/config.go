@@ -1,7 +1,7 @@
 package config
 
 import (
-	"encoding/json"
+	"math"
 	"reflect"
 	"strconv"
 	"strings"
@@ -134,7 +134,7 @@ func configToMap(config interface{}) (map[string]string, error) {
 		case reflect.Ptr:
 			// 处理指针类型：如果非 nil，序列化指向的值
 			if !field.IsNil() {
-				bytes, err := json.Marshal(field.Interface())
+				bytes, err := common.Marshal(field.Interface())
 				if err != nil {
 					return nil, err
 				}
@@ -145,7 +145,7 @@ func configToMap(config interface{}) (map[string]string, error) {
 			}
 		case reflect.Map, reflect.Slice, reflect.Struct:
 			// 复杂类型使用JSON序列化
-			bytes, err := json.Marshal(field.Interface())
+			bytes, err := common.Marshal(field.Interface())
 			if err != nil {
 				return nil, err
 			}
@@ -212,23 +212,31 @@ func updateConfigFromMap(config interface{}, configMap map[string]string) error 
 		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 			intValue, err := strconv.ParseInt(strValue, 10, 64)
 			if err != nil {
-				// 兼容 float 格式的字符串（如 "2.000000"）
+				// Accept float-formatted integers (for example "2.000000")
+				// without silently truncating fractional configuration values.
 				floatValue, fErr := strconv.ParseFloat(strValue, 64)
-				if fErr != nil {
+				if fErr != nil || math.IsNaN(floatValue) || math.IsInf(floatValue, 0) || math.Trunc(floatValue) != floatValue || floatValue < -float64(1<<63) || floatValue >= float64(1<<63) {
 					continue
 				}
 				intValue = int64(floatValue)
+			}
+			if field.OverflowInt(intValue) {
+				continue
 			}
 			field.SetInt(intValue)
 		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 			uintValue, err := strconv.ParseUint(strValue, 10, 64)
 			if err != nil {
-				// 兼容 float 格式的字符串
+				// Accept float-formatted integers while rejecting fractions,
+				// negative values, infinities, and overflow.
 				floatValue, fErr := strconv.ParseFloat(strValue, 64)
-				if fErr != nil || floatValue < 0 {
+				if fErr != nil || math.IsNaN(floatValue) || math.IsInf(floatValue, 0) || floatValue < 0 || math.Trunc(floatValue) != floatValue || floatValue >= float64(1<<64) {
 					continue
 				}
 				uintValue = uint64(floatValue)
+			}
+			if field.OverflowUint(uintValue) {
+				continue
 			}
 			field.SetUint(uintValue)
 		case reflect.Float32, reflect.Float64:
@@ -247,7 +255,7 @@ func updateConfigFromMap(config interface{}, configMap map[string]string) error 
 					field.Set(reflect.New(field.Type().Elem()))
 				}
 				// 反序列化到指针指向的值
-				err := json.Unmarshal([]byte(strValue), field.Interface())
+				err := common.Unmarshal([]byte(strValue), field.Interface())
 				if err != nil {
 					continue
 				}
@@ -257,12 +265,20 @@ func updateConfigFromMap(config interface{}, configMap map[string]string) error 
 			// absent from the new JSON). Allocate a fresh map so removed keys
 			// are properly cleared.
 			fresh := reflect.New(field.Type())
-			if err := json.Unmarshal([]byte(strValue), fresh.Interface()); err != nil {
+			if err := common.Unmarshal([]byte(strValue), fresh.Interface()); err != nil {
 				continue
 			}
 			field.Set(fresh.Elem())
-		case reflect.Slice, reflect.Struct:
-			err := json.Unmarshal([]byte(strValue), field.Addr().Interface())
+		case reflect.Slice:
+			// Decode replacements separately so omitted fields and invalid input
+			// cannot retain or mutate elements from the previous slice.
+			fresh := reflect.New(field.Type())
+			if err := common.Unmarshal([]byte(strValue), fresh.Interface()); err != nil {
+				continue
+			}
+			field.Set(fresh.Elem())
+		case reflect.Struct:
+			err := common.Unmarshal([]byte(strValue), field.Addr().Interface())
 			if err != nil {
 				continue
 			}

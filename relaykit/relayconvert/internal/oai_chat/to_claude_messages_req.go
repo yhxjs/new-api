@@ -21,7 +21,7 @@ const (
 )
 
 type openRouterRequestReasoning struct {
-	Enabled   bool   `json:"enabled"`
+	Enabled   *bool  `json:"enabled"`
 	Effort    string `json:"effort,omitempty"`
 	MaxTokens int    `json:"max_tokens,omitempty"`
 	Exclude   bool   `json:"exclude,omitempty"`
@@ -195,10 +195,42 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 		}
 
 		budgetTokens := reasoningConfig.MaxTokens
-		if budgetTokens > 0 {
+		if reasoningConfig.Enabled != nil && !*reasoningConfig.Enabled {
+			claudeRequest.Thinking = &dto.Thinking{Type: "disabled"}
+			claudeRequest.OutputConfig = nil
+			// Explicit disabling overrides suffix-derived thinking and its headroom.
+			if maxTokens := textRequest.GetMaxTokens(); maxTokens > 0 {
+				claudeRequest.MaxTokens = kitutil.GetPointer(maxTokens)
+			}
+			if !strings.HasPrefix(claudeRequest.Model, "claude-opus-4-7") &&
+				!strings.HasPrefix(claudeRequest.Model, "claude-opus-4-8") {
+				claudeRequest.Temperature = textRequest.Temperature
+				claudeRequest.TopP = textRequest.TopP
+				claudeRequest.TopK = textRequest.TopK
+			}
+		} else if budgetTokens > 0 {
 			claudeRequest.Thinking = &dto.Thinking{
 				Type:         "enabled",
 				BudgetTokens: &budgetTokens,
+			}
+		} else if (reasoningConfig.Effort == "low" || reasoningConfig.Effort == "medium" || reasoningConfig.Effort == "high") &&
+			(strings.Contains(textRequest.Model, "claude-opus-4-6") ||
+				strings.Contains(textRequest.Model, "claude-opus-4-7") ||
+				strings.Contains(textRequest.Model, "claude-opus-4-8")) {
+			// Explicit adaptive effort also supports Bedrock's provider prefixes.
+			claudeRequest.Thinking = &dto.Thinking{Type: "adaptive"}
+			outputConfig, err := kitutil.Marshal(map[string]string{"effort": reasoningConfig.Effort})
+			if err != nil {
+				return nil, err
+			}
+			claudeRequest.OutputConfig = outputConfig
+			claudeRequest.TopP = nil
+			if strings.Contains(textRequest.Model, "claude-opus-4-7") || strings.Contains(textRequest.Model, "claude-opus-4-8") {
+				claudeRequest.Thinking.Display = "summarized"
+				claudeRequest.Temperature = nil
+				claudeRequest.TopK = nil
+			} else {
+				claudeRequest.Temperature = kitutil.GetPointer(1.0)
 			}
 		}
 	}

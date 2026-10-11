@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -196,6 +197,56 @@ func TestHeaderNavModelStatusAuth(t *testing.T) {
 			recorder := performHeaderNavRequest(t, HeaderNavModelStatusAuth(), testCase.authenticated)
 
 			require.Equal(t, testCase.wantStatus, recorder.Code)
+		})
+	}
+}
+
+func TestHeaderNavDegradationCheckAuthProtectsHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, test := range []struct {
+		name       string
+		enabled    bool
+		role       int
+		wantStatus int
+	}{
+		{name: "disabled rejects regular user", role: common.RoleCommonUser, wantStatus: http.StatusForbidden},
+		{name: "disabled allows admin", role: common.RoleAdminUser, wantStatus: http.StatusOK},
+		{name: "enabled allows regular user", enabled: true, role: common.RoleCommonUser, wantStatus: http.StatusOK},
+		{name: "enabled requires login", enabled: true, wantStatus: http.StatusUnauthorized},
+		{name: "disabled requires login", wantStatus: http.StatusUnauthorized},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			setupDashboardAuthMiddlewareTest(t)
+			raw, err := common.Marshal(map[string]any{
+				"degradationCheck": map[string]bool{"enabled": test.enabled, "requireAuth": false},
+			})
+			require.NoError(t, err)
+			withHeaderNavModules(t, string(raw))
+			if test.role != 0 {
+				user := createMiddlewarePATUser(t, "degradation-user", "degradation-pat")
+				require.NoError(t, model.DB.Model(user).Update("role", test.role).Error)
+			}
+
+			handlerCalled := false
+			router := gin.New()
+			router.GET("/api/test", UserAuth(), HeaderNavDegradationCheckAuth(), func(c *gin.Context) {
+				handlerCalled = true
+				c.JSON(http.StatusOK, gin.H{"success": true})
+			})
+			request := httptest.NewRequest(http.MethodGet, "/api/test", nil)
+			if test.role != 0 {
+				request.Header.Set("Authorization", "Bearer degradation-pat")
+			}
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+
+			assert.Equal(t, test.wantStatus, response.Code)
+			assert.Equal(t, test.wantStatus == http.StatusOK, handlerCalled)
+			var body struct {
+				Success bool `json:"success"`
+			}
+			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &body))
+			assert.Equal(t, test.wantStatus == http.StatusOK, body.Success)
 		})
 	}
 }

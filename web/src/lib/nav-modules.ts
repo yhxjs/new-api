@@ -24,7 +24,11 @@ export type RankingsAccess = ModuleAccess & {
   userLeaderboardEnabled: boolean
 }
 
-export type HeaderNavModule = 'rankings' | 'pricing' | 'modelStatus'
+export type HeaderNavModule =
+  | 'rankings'
+  | 'pricing'
+  | 'modelStatus'
+  | 'degradationCheck'
 
 export type HeaderNavModules = {
   home: boolean
@@ -32,6 +36,7 @@ export type HeaderNavModules = {
   pricing: ModuleAccess
   rankings: RankingsAccess
   modelStatus: ModuleAccess
+  degradationCheck: ModuleAccess
   docs: boolean
   about: boolean
   [key: string]: boolean | ModuleAccess | RankingsAccess
@@ -47,6 +52,7 @@ const DEFAULT_HEADER_NAV_MODULES: HeaderNavModules = {
     userLeaderboardEnabled: false,
   },
   modelStatus: { enabled: false, requireAuth: true },
+  degradationCheck: { enabled: false, requireAuth: true },
   docs: true,
   about: true,
 }
@@ -55,6 +61,7 @@ const DEFAULTS: Record<HeaderNavModule, ModuleAccess> = {
   pricing: DEFAULT_HEADER_NAV_MODULES.pricing,
   rankings: DEFAULT_HEADER_NAV_MODULES.rankings,
   modelStatus: DEFAULT_HEADER_NAV_MODULES.modelStatus,
+  degradationCheck: DEFAULT_HEADER_NAV_MODULES.degradationCheck,
 }
 
 function cloneHeaderNavDefaults(): HeaderNavModules {
@@ -63,6 +70,7 @@ function cloneHeaderNavDefaults(): HeaderNavModules {
     pricing: { ...DEFAULT_HEADER_NAV_MODULES.pricing },
     rankings: { ...DEFAULT_HEADER_NAV_MODULES.rankings },
     modelStatus: { ...DEFAULT_HEADER_NAV_MODULES.modelStatus },
+    degradationCheck: { ...DEFAULT_HEADER_NAV_MODULES.degradationCheck },
   }
 }
 
@@ -156,6 +164,13 @@ export function parseHeaderNavModules(raw: unknown): HeaderNavModules {
       }
       return
     }
+    if (key === 'degradationCheck') {
+      result.degradationCheck = {
+        ...parseAccess(value, result.degradationCheck),
+        requireAuth: true,
+      }
+      return
+    }
 
     const fallback = result[key]
     if (
@@ -221,7 +236,7 @@ export function getFreshModuleAccess(
   module: 'rankings'
 ): Promise<RankingsAccess>
 export function getFreshModuleAccess(
-  module: 'pricing' | 'modelStatus'
+  module: 'pricing' | 'modelStatus' | 'degradationCheck'
 ): Promise<ModuleAccess>
 export async function getFreshModuleAccess(
   module: HeaderNavModule

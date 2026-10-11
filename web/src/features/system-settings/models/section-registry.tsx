@@ -21,6 +21,7 @@ import { IoNetDeploymentSettingsSection } from '../integrations/ionet-deployment
 import type { ModelSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
 import { ClaudeSettingsCard } from './claude-settings-card'
+import { DegradationCheckSection } from './degradation-check-section'
 import { GeminiSettingsCard } from './gemini-settings-card'
 import { GlobalSettingsCard } from './global-settings-card'
 import { GrokSettingsCard } from './grok-settings-card'
@@ -165,6 +166,33 @@ const MODELS_SECTIONS = [
             settings['channel_affinity_setting.default_ttl_seconds'],
           'channel_affinity_setting.rules':
             settings['channel_affinity_setting.rules'],
+        }}
+      />
+    ),
+  },
+  {
+    id: 'degradation-check',
+    titleKey: 'Degradation Check',
+    build: (settings: ModelSettings) => (
+      <DegradationCheckSection
+        defaultValues={{
+          'degradation_setting.enabled':
+            settings['degradation_setting.enabled'],
+          'degradation_setting.interval_minutes':
+            settings['degradation_setting.interval_minutes'],
+          'degradation_setting.concurrency':
+            settings['degradation_setting.concurrency'],
+          'degradation_setting.channel_jitter_ms':
+            settings['degradation_setting.channel_jitter_ms'],
+          'degradation_setting.timeout_seconds':
+            settings['degradation_setting.timeout_seconds'],
+          'degradation_setting.retention_days':
+            settings['degradation_setting.retention_days'],
+          'degradation_setting.public_mask_topology':
+            settings['degradation_setting.public_mask_topology'],
+          'degradation_setting.targets':
+            settings['degradation_setting.targets'],
+          'degradation_setting.probes': settings['degradation_setting.probes'],
         }}
       />
     ),

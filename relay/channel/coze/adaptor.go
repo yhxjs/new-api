@@ -1,13 +1,14 @@
 package coze
 
 import (
-	"encoding/json"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"time"
 
+	common2 "github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -67,19 +68,27 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *common.RelayInfo, requestBody 
 	if info.IsStream {
 		return channel.DoApiRequest(a, c, info, requestBody)
 	}
+	ctx := context.Background()
+	if info.IsChannelTest {
+		ctx = c.Request.Context()
+	}
 	// 首先发送创建消息请求，成功后再发送获取消息请求
 	// 发送创建消息请求
 	resp, err := channel.DoApiRequest(a, c, info, requestBody)
 	if err != nil {
 		return nil, err
 	}
+	defer resp.Body.Close()
 	// 解析 resp
 	var cozeResponse CozeChatResponse
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
-	err = json.Unmarshal(respBody, &cozeResponse)
+	err = common2.Unmarshal(respBody, &cozeResponse)
+	if err != nil {
+		return nil, err
+	}
 	if cozeResponse.Code != 0 {
 		return nil, errors.New(cozeResponse.Msg)
 	}
@@ -95,7 +104,13 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *common.RelayInfo, requestBody 
 				break
 			}
 		}
-		time.Sleep(time.Second * 1)
+		timer := time.NewTimer(time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
 	}
 	// 发送获取消息请求
 	return getChatDetail(a, c, info)

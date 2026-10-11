@@ -107,6 +107,65 @@ func TestSystemTaskSchedulerSkipsDisabled(t *testing.T) {
 	assert.Equal(t, int64(0), countSystemTasks(t, handler.taskType))
 }
 
+func TestSystemTaskSchedulerIgnoresFinishedManualPayloadForSchedule(t *testing.T) {
+	truncate(t)
+
+	handler := &stubScheduledHandler{taskType: model.SystemTaskTypeDegradationCheck, enabled: true, interval: time.Hour}
+	withSystemTaskRegistry(t, handler)
+
+	manual, err := model.CreateSystemTask(handler.taskType, map[string]any{
+		"channel_id": 11,
+		"model_name": "manual-model",
+	}, nil)
+	require.NoError(t, err)
+	_, claimed, err := model.ClaimSystemTask(manual.ID, manual.Type, "runner-manual", common.GetTimestamp()+60)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	require.NoError(t, model.FinishSystemTask(manual.TaskID, "runner-manual", model.SystemTaskStatusSucceeded, nil, ""))
+
+	runSystemTaskScheduler()
+	require.Equal(t, int64(2), countSystemTasks(t, handler.taskType), "the finished manual run must not postpone the first scheduled run")
+
+	latest, err := model.GetLatestSystemTask(handler.taskType)
+	require.NoError(t, err)
+	require.NotNil(t, latest)
+	assert.Empty(t, latest.Payload)
+}
+
+func TestSystemTaskSchedulerTreatsFinishedChannelTestManualRunAsLatest(t *testing.T) {
+	truncate(t)
+
+	handler := &stubScheduledHandler{taskType: model.SystemTaskTypeChannelTest, enabled: true, interval: time.Hour}
+	withSystemTaskRegistry(t, handler)
+
+	manual, err := model.CreateSystemTask(handler.taskType, map[string]any{"manual": true}, nil)
+	require.NoError(t, err)
+	_, claimed, err := model.ClaimSystemTask(manual.ID, manual.Type, "runner-manual", common.GetTimestamp()+60)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	require.NoError(t, model.FinishSystemTask(manual.TaskID, "runner-manual", model.SystemTaskStatusSucceeded, nil, ""))
+
+	runSystemTaskScheduler()
+	require.Equal(t, int64(1), countSystemTasks(t, handler.taskType), "a completed manual channel test must postpone the scheduled run")
+}
+
+func TestSystemTaskSchedulerTreatsFinishedModelUpdateManualRunAsLatest(t *testing.T) {
+	truncate(t)
+
+	handler := &stubScheduledHandler{taskType: model.SystemTaskTypeModelUpdate, enabled: true, interval: time.Hour}
+	withSystemTaskRegistry(t, handler)
+
+	manual, err := model.CreateSystemTask(handler.taskType, map[string]any{"manual": true}, nil)
+	require.NoError(t, err)
+	_, claimed, err := model.ClaimSystemTask(manual.ID, manual.Type, "runner-manual", common.GetTimestamp()+60)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	require.NoError(t, model.FinishSystemTask(manual.TaskID, "runner-manual", model.SystemTaskStatusSucceeded, nil, ""))
+
+	runSystemTaskScheduler()
+	require.Equal(t, int64(1), countSystemTasks(t, handler.taskType), "a completed manual model update must postpone the scheduled run")
+}
+
 func TestSystemTaskClaimPassDispatchesByType(t *testing.T) {
 	truncate(t)
 

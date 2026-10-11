@@ -315,6 +315,32 @@ type OpenAIResponsesResponse struct {
 	Metadata           json.RawMessage    `json:"metadata"`
 }
 
+func (r *OpenAIResponsesResponse) UnmarshalJSON(data []byte) error {
+	type responseJSON OpenAIResponsesResponse
+	type usageJSON struct {
+		Usage
+		OutputTokensDetails *OutputTokenDetails `json:"output_tokens_details"`
+	}
+	decoded := struct {
+		*responseJSON
+		Usage *usageJSON `json:"usage"`
+	}{responseJSON: (*responseJSON)(r)}
+	if r.Usage != nil {
+		decoded.Usage = &usageJSON{Usage: *r.Usage}
+	}
+	if err := kitutil.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	r.Usage = nil
+	if decoded.Usage != nil {
+		r.Usage = &decoded.Usage.Usage
+		if decoded.Usage.OutputTokensDetails != nil {
+			r.Usage.CompletionTokenDetails = *decoded.Usage.OutputTokensDetails
+		}
+	}
+	return nil
+}
+
 // GetOpenAIError 从动态错误类型中提取OpenAIError结构
 func (o *OpenAIResponsesResponse) GetOpenAIError() *types.OpenAIError {
 	return GetOpenAIError(o.Error)

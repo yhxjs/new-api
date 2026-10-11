@@ -63,10 +63,16 @@ func (c *QuotaClamp) AuditMap() map[string]interface{} {
 	if c == nil {
 		return nil
 	}
+	// JSON cannot encode non-finite numbers; preserve their diagnostic value
+	// as text so saturation never prevents the consume log from being saved.
+	var original any = c.Original
+	if math.IsNaN(c.Original) || math.IsInf(c.Original, 0) {
+		original = fmt.Sprintf("%g", c.Original)
+	}
 	return map[string]interface{}{
 		"op":       c.Op,
 		"kind":     c.Kind,
-		"original": c.Original,
+		"original": original,
 		"clamped":  c.Clamped,
 	}
 }

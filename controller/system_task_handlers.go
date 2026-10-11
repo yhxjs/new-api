@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/degradation_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
 
@@ -22,6 +23,7 @@ func RegisterScheduledSystemTasks() {
 	service.RegisterSystemTaskHandler(modelUpdateHandler{})
 	service.RegisterSystemTaskHandler(midjourneyPollHandler{})
 	service.RegisterSystemTaskHandler(asyncTaskPollHandler{})
+	service.RegisterSystemTaskHandler(degradationCheckHandler{})
 }
 
 // channelTestHandler runs the scheduled "test all channels" job. Enablement and
@@ -152,12 +154,49 @@ func (asyncTaskPollHandler) Run(ctx context.Context, task *model.SystemTask, run
 	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
 }
 
-func finishSystemTaskHandler(task *model.SystemTask, runnerID string, status model.SystemTaskStatus, result any, runErr error) {
+// degradationCheckHandler runs the scheduled degradation detection job.
+type degradationCheckHandler struct{}
+
+func (degradationCheckHandler) Type() string { return model.SystemTaskTypeDegradationCheck }
+
+func (degradationCheckHandler) Enabled() bool {
+	return degradation_setting.GetDegradationSetting().Enabled
+}
+
+func (degradationCheckHandler) Interval() time.Duration {
+	mins := degradation_setting.GetDegradationSetting().IntervalMinutes
+	if mins <= 0 {
+		mins = degradation_setting.DefaultIntervalMinutes
+	}
+	return time.Duration(mins) * time.Minute
+}
+
+func (degradationCheckHandler) NewPayload() any { return nil }
+
+func (degradationCheckHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	var filter degradationTargetFilter
+	if err := task.DecodePayload(&filter); err != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, fmt.Errorf("invalid degradation check payload: %w", err))
+		return
+	}
+	summary, err := runDegradationCheckTask(ctx, service.NewSystemTaskProgressReporter(task, runnerID), filter)
+	if err != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, err)
+		return
+	}
+	if finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, summary, nil) {
+		RefreshDegradationOverviewCache()
+	}
+}
+
+func finishSystemTaskHandler(task *model.SystemTask, runnerID string, status model.SystemTaskStatus, result any, runErr error) bool {
 	errorMessage := ""
 	if runErr != nil {
 		errorMessage = runErr.Error()
 	}
 	if err := model.FinishSystemTask(task.TaskID, runnerID, status, result, errorMessage); err != nil {
 		common.SysLog(fmt.Sprintf("system task %s failed to persist result: %v", task.TaskID, err))
+		return false
 	}
+	return true
 }

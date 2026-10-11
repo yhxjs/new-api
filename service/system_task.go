@@ -265,6 +265,7 @@ func runSystemTaskScheduler() {
 	handlers := registeredSystemTaskHandlers()
 	scheduledHandlers := make([]ScheduledSystemTaskHandler, 0, len(handlers))
 	taskTypes := make([]string, 0, len(handlers))
+	hasDegradationSchedule := false
 	for _, handler := range handlers {
 		scheduled, ok := handler.(ScheduledSystemTaskHandler)
 		if !ok || !scheduled.Enabled() {
@@ -272,11 +273,31 @@ func runSystemTaskScheduler() {
 		}
 		scheduledHandlers = append(scheduledHandlers, scheduled)
 		taskTypes = append(taskTypes, scheduled.Type())
+		if scheduled.Type() == model.SystemTaskTypeDegradationCheck {
+			hasDegradationSchedule = true
+		}
 	}
+	// Manual runs of channel tests and model updates carry payloads but still
+	// participate in the normal cadence: their completion is the latest run
+	// and must postpone the next scheduled pass. Degradation checks are the one
+	// type whose manual target runs must not postpone the full scheduled round,
+	// so apply the special query only to that type.
 	latestTasks, err := model.GetLatestSystemTasks(taskTypes)
 	if err != nil {
 		logger.LogWarn(context.Background(), fmt.Sprintf("system task scheduler query failed: %v", err))
 		return
+	}
+	if hasDegradationSchedule {
+		degradationLatest, queryErr := model.GetLatestScheduledSystemTasks([]string{model.SystemTaskTypeDegradationCheck})
+		if queryErr != nil {
+			logger.LogWarn(context.Background(), fmt.Sprintf("system task scheduler query failed: %v", queryErr))
+			return
+		}
+		if task, ok := degradationLatest[model.SystemTaskTypeDegradationCheck]; ok {
+			latestTasks[model.SystemTaskTypeDegradationCheck] = task
+		} else {
+			delete(latestTasks, model.SystemTaskTypeDegradationCheck)
+		}
 	}
 	for _, scheduled := range scheduledHandlers {
 		latest := latestTasks[scheduled.Type()]

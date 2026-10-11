@@ -77,6 +77,7 @@ import {
   getOptionValue,
 } from '@/features/system-settings/hooks/use-system-options'
 import { useUpdateOption } from '@/features/system-settings/hooks/use-update-option'
+import { DEGRADATION_SETTING_DEFAULTS } from '@/features/system-settings/models/degradation-defaults'
 import { normalizeJsonString } from '@/features/system-settings/models/utils'
 import type { ModelSettings } from '@/features/system-settings/types'
 import { safeJsonParse } from '@/features/system-settings/utils/json-parser'
@@ -345,6 +346,7 @@ export function ModelMutateDrawer({
       'channel_affinity_setting.rules': '[]',
       'model_deployment.ionet.api_key': '',
       'model_deployment.ionet.enabled': false,
+      ...DEGRADATION_SETTING_DEFAULTS,
     }
     return getOptionValue(systemOptionsData.data, defaultModelSettings)
   }, [systemOptionsData])

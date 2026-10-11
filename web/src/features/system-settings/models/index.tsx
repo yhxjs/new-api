@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { SettingsPage } from '../components/settings-page'
 import type { ModelSettings } from '../types'
+import { DEGRADATION_SETTING_DEFAULTS } from './degradation-defaults'
 import {
   MODELS_DEFAULT_SECTION,
   getModelsSectionContent,
@@ -83,6 +84,7 @@ const defaultModelSettings: ModelSettings = {
   'channel_affinity_setting.rules': '[]',
   'model_deployment.ionet.api_key': '',
   'model_deployment.ionet.enabled': false,
+  ...DEGRADATION_SETTING_DEFAULTS,
 }
 
 export function ModelSettings() {

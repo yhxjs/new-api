@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as authRouteRouteImport } from './routes/(auth)/route'
 import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
+import { Route as DegradationCheckRouteImport } from './routes/degradation-check'
 import { Route as ModelStatusRouteImport } from './routes/model-status'
 import { Route as PrivacyPolicyRouteImport } from './routes/privacy-policy'
 import { Route as RankingsRouteRouteImport } from './routes/rankings/route'
@@ -83,6 +84,11 @@ const authRouteRoute = authRouteRouteImport.update({
 } as any)
 const AuthenticatedRouteRoute = AuthenticatedRouteRouteImport.update({
   id: '/_authenticated',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DegradationCheckRoute = DegradationCheckRouteImport.update({
+  id: '/degradation-check',
+  path: '/degradation-check',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ModelStatusRoute = ModelStatusRouteImport.update({
@@ -415,6 +421,7 @@ const AuthenticatedSystemSettingsSiteSectionRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/rankings': typeof RankingsRouteRouteWithChildren
+  '/degradation-check': typeof DegradationCheckRoute
   '/model-status': typeof ModelStatusRoute
   '/privacy-policy': typeof PrivacyPolicyRoute
   '/user-agreement': typeof UserAgreementRoute
@@ -476,6 +483,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/degradation-check': typeof DegradationCheckRoute
   '/model-status': typeof ModelStatusRoute
   '/privacy-policy': typeof PrivacyPolicyRoute
   '/user-agreement': typeof UserAgreementRoute
@@ -540,6 +548,7 @@ export interface FileRoutesById {
   '/(auth)': typeof authRouteRouteWithChildren
   '/_authenticated': typeof AuthenticatedRouteRouteWithChildren
   '/rankings': typeof RankingsRouteRouteWithChildren
+  '/degradation-check': typeof DegradationCheckRoute
   '/model-status': typeof ModelStatusRoute
   '/privacy-policy': typeof PrivacyPolicyRoute
   '/user-agreement': typeof UserAgreementRoute
@@ -604,6 +613,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/rankings'
+    | '/degradation-check'
     | '/model-status'
     | '/privacy-policy'
     | '/user-agreement'
@@ -665,6 +675,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/degradation-check'
     | '/model-status'
     | '/privacy-policy'
     | '/user-agreement'
@@ -728,6 +739,7 @@ export interface FileRouteTypes {
     | '/(auth)'
     | '/_authenticated'
     | '/rankings'
+    | '/degradation-check'
     | '/model-status'
     | '/privacy-policy'
     | '/user-agreement'
@@ -793,6 +805,7 @@ export interface RootRouteChildren {
   authRouteRoute: typeof authRouteRouteWithChildren
   AuthenticatedRouteRoute: typeof AuthenticatedRouteRouteWithChildren
   RankingsRouteRoute: typeof RankingsRouteRouteWithChildren
+  DegradationCheckRoute: typeof DegradationCheckRoute
   ModelStatusRoute: typeof ModelStatusRoute
   PrivacyPolicyRoute: typeof PrivacyPolicyRoute
   UserAgreementRoute: typeof UserAgreementRoute
@@ -829,6 +842,13 @@ declare module '@tanstack/react-router' {
       path: ''
       fullPath: '/'
       preLoaderRoute: typeof AuthenticatedRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/degradation-check': {
+      id: '/degradation-check'
+      path: '/degradation-check'
+      fullPath: '/degradation-check'
+      preLoaderRoute: typeof DegradationCheckRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/model-status': {
@@ -1400,6 +1420,7 @@ const rootRouteChildren: RootRouteChildren = {
   authRouteRoute: authRouteRouteWithChildren,
   AuthenticatedRouteRoute: AuthenticatedRouteRouteWithChildren,
   RankingsRouteRoute: RankingsRouteRouteWithChildren,
+  DegradationCheckRoute: DegradationCheckRoute,
   ModelStatusRoute: ModelStatusRoute,
   PrivacyPolicyRoute: PrivacyPolicyRoute,
   UserAgreementRoute: UserAgreementRoute,

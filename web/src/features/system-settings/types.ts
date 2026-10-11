@@ -249,6 +249,15 @@ export type ModelSettings = {
   'channel_affinity_setting.rules': string
   'model_deployment.ionet.api_key': string
   'model_deployment.ionet.enabled': boolean
+  'degradation_setting.enabled': boolean
+  'degradation_setting.interval_minutes': number
+  'degradation_setting.concurrency': number
+  'degradation_setting.channel_jitter_ms': number
+  'degradation_setting.timeout_seconds': number
+  'degradation_setting.retention_days': number
+  'degradation_setting.public_mask_topology': boolean
+  'degradation_setting.targets': string
+  'degradation_setting.probes': string
 }
 
 export type BillingSettings = {

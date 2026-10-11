@@ -57,6 +57,7 @@ const headerNavSchema = z.object({
   rankingsRequireAuth: z.boolean(),
   userLeaderboardEnabled: z.boolean(),
   modelStatusEnabled: z.boolean(),
+  degradationCheckEnabled: z.boolean(),
   docs: z.boolean(),
   about: z.boolean(),
 })
@@ -99,6 +100,10 @@ const toFormValues = (config: HeaderNavModulesConfig): HeaderNavFormValues => ({
     config.modelStatus?.enabled === undefined
       ? HEADER_NAV_DEFAULT.modelStatus.enabled
       : Boolean(config.modelStatus.enabled),
+  degradationCheckEnabled:
+    config.degradationCheck?.enabled === undefined
+      ? HEADER_NAV_DEFAULT.degradationCheck.enabled
+      : Boolean(config.degradationCheck.enabled),
   docs:
     config.docs === undefined ? HEADER_NAV_DEFAULT.docs : Boolean(config.docs),
   about:
@@ -145,6 +150,11 @@ export function HeaderNavigationSection({
       modelStatus: {
         ...(config.modelStatus ?? HEADER_NAV_DEFAULT.modelStatus),
         enabled: values.modelStatusEnabled,
+        requireAuth: true,
+      },
+      degradationCheck: {
+        ...(config.degradationCheck ?? HEADER_NAV_DEFAULT.degradationCheck),
+        enabled: values.degradationCheckEnabled,
         requireAuth: true,
       },
     }
@@ -349,6 +359,30 @@ export function HeaderNavigationSection({
                     <FormDescription>
                       {t(
                         'Show recent model availability and performance to signed-in users.'
+                      )}
+                    </FormDescription>
+                  </SettingsSwitchContent>
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </SettingsSwitchItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='degradationCheckEnabled'
+              render={({ field }) => (
+                <SettingsSwitchItem>
+                  <SettingsSwitchContent>
+                    <FormLabel>{t('Degradation Check')}</FormLabel>
+                    <FormDescription>
+                      {t(
+                        'Show live model degradation and semantic health status to signed-in users.'
                       )}
                     </FormDescription>
                   </SettingsSwitchContent>

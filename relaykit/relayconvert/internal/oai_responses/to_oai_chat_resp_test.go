@@ -4,9 +4,34 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestResponsesResponseToChatCompletionsPreservesOutputTokenDetails(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		details   string
+		reasoning int
+	}{
+		{name: "native Responses details", details: `"output_tokens_details":{"reasoning_tokens":5}`, reasoning: 5},
+		{name: "compatible Chat details", details: `"completion_tokens_details":{"reasoning_tokens":5}`, reasoning: 5},
+		{name: "explicit native zero takes precedence", details: `"output_tokens_details":{"reasoning_tokens":0},"completion_tokens_details":{"reasoning_tokens":5}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var response dto.OpenAIResponsesResponse
+			require.NoError(t, kitutil.Unmarshal([]byte(`{"usage":{"input_tokens":10,"output_tokens":7,"total_tokens":17,`+tc.details+`}}`), &response))
+
+			chat, usage, err := ResponsesResponseToChatCompletionsResponse(&response, "chat-probe")
+
+			require.NoError(t, err)
+			assert.Equal(t, 7, usage.CompletionTokens)
+			assert.Equal(t, tc.reasoning, usage.CompletionTokenDetails.ReasoningTokens)
+			assert.Equal(t, tc.reasoning, chat.Usage.CompletionTokenDetails.ReasoningTokens)
+		})
+	}
+}
 
 func TestResponsesResponseToChatCompletionsPreservesTextAndToolCalls(t *testing.T) {
 	resp := &dto.OpenAIResponsesResponse{

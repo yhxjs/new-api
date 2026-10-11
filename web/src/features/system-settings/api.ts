@@ -32,7 +32,10 @@ import type {
 } from './types'
 
 export async function getSystemOptions() {
-  const res = await api.get<SystemOptionsResponse>('/api/option/')
+  // React Query owns deduplication; invalidation needs a fresh server snapshot.
+  const res = await api.get<SystemOptionsResponse>('/api/option/', {
+    disableDuplicate: true,
+  })
   return res.data
 }
 

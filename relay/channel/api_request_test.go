@@ -2,14 +2,50 @@ package channel
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+type cancellationTestAdaptor struct {
+	Adaptor
+	url string
+}
+
+func (a cancellationTestAdaptor) GetRequestURL(*relaycommon.RelayInfo) (string, error) {
+	return a.url, nil
+}
+func (a cancellationTestAdaptor) SetupRequestHeader(*gin.Context, *http.Header, *relaycommon.RelayInfo) error {
+	return nil
+}
+
+func TestDoAPIRequestInheritsCancellationDuringBodyRead(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{}")).WithContext(ctx)
+	response, err := DoApiRequest(cancellationTestAdaptor{url: server.URL}, c, &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}, IsChannelTest: true}, strings.NewReader("{}"))
+	require.NoError(t, err)
+	defer response.Body.Close()
+	// Cancel the exact context carried by the incoming request. Inspect it
+	// before reading so the pre-fix test fails without waiting on a stuck body.
+	cancel()
+	require.ErrorIs(t, response.Request.Context().Err(), context.Canceled)
+	_, err = io.ReadAll(response.Body)
+	require.Error(t, err)
+}
 
 func TestNewTaskAPIRequestInheritsClientCancellation(t *testing.T) {
 	recorder := httptest.NewRecorder()

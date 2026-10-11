@@ -327,8 +327,21 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 	}
 	isOModel := dto.IsOpenAIReasoningOModel(info.UpstreamModelName)
 	isGPT5Model := dto.IsOpenAIGPT5Model(info.UpstreamModelName)
+	// 官方 OpenAI 与 Azure 不接受同时下发两个输出上限；自定义 OpenAI
+	// 兼容上游可能只识别 max_tokens，不能仅凭渠道类型删除旧参数。
+	if request.MaxCompletionTokens != nil && request.MaxTokens != nil {
+		switch info.ChannelType {
+		case constant.ChannelTypeAzure:
+			request.MaxTokens = nil
+		case constant.ChannelTypeOpenAI:
+			baseURL, err := url.Parse(info.ChannelBaseUrl)
+			if info.ChannelBaseUrl == "" || (err == nil && strings.EqualFold(baseURL.Hostname(), "api.openai.com")) {
+				request.MaxTokens = nil
+			}
+		}
+	}
 	if isOModel || isGPT5Model {
-		if lo.FromPtrOr(request.MaxCompletionTokens, uint(0)) == 0 && lo.FromPtrOr(request.MaxTokens, uint(0)) != 0 {
+		if request.MaxCompletionTokens == nil && lo.FromPtrOr(request.MaxTokens, uint(0)) != 0 {
 			request.MaxCompletionTokens = request.MaxTokens
 			request.MaxTokens = nil
 		}

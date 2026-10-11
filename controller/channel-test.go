@@ -537,19 +537,32 @@ func settleTestQuota(info *relaycommon.RelayInfo, priceData hosttypes.PriceData,
 			return quota, result
 		}
 	}
+	noteClamp := func(clamp *common.QuotaClamp) {
+		if clamp != nil && info != nil && info.QuotaClamp == nil {
+			info.QuotaClamp = clamp
+		}
+	}
 
 	quota := 0
 	if !priceData.UsePrice {
-		completionQuota := common.QuotaRound(float64(usage.CompletionTokens) * priceData.CompletionRatio)
-		quota = common.QuotaRound(float64(usage.PromptTokens) + float64(completionQuota))
-		quota = common.QuotaRound(float64(quota) * priceData.ModelRatio)
+		completionQuota, clamp := common.QuotaRoundChecked(float64(usage.CompletionTokens) * priceData.CompletionRatio)
+		noteClamp(clamp)
+		promptQuota, clamp := common.QuotaRoundChecked(float64(usage.PromptTokens) + float64(completionQuota))
+		noteClamp(clamp)
+		quota, clamp = common.QuotaRoundChecked(float64(promptQuota) * priceData.ModelRatio)
+		noteClamp(clamp)
 		if priceData.ModelRatio != 0 && quota <= 0 {
 			quota = 1
 		}
 		return quota, nil
 	}
 
-	return common.QuotaFromFloat(priceData.ModelPrice * common.QuotaPerUnit), nil
+	quota, clamp := common.QuotaFromFloatChecked(priceData.ModelPrice * common.QuotaPerUnit)
+	noteClamp(clamp)
+	if quota < 0 {
+		quota = 0
+	}
+	return quota, nil
 }
 
 func buildTestLogOther(c *gin.Context, info *relaycommon.RelayInfo, priceData hosttypes.PriceData, usage *dto.Usage, tieredResult *billingexpr.TieredResult) map[string]interface{} {
@@ -558,34 +571,78 @@ func buildTestLogOther(c *gin.Context, info *relaycommon.RelayInfo, priceData ho
 	if tieredResult != nil {
 		service.InjectTieredBillingInfo(other, info, tieredResult)
 	}
+	service.AttachQuotaSaturation(c, info, other)
 	return other
 }
 
 func coerceTestUsage(usageAny any, isStream bool, estimatePromptTokens int) (*dto.Usage, error) {
+	var usage *dto.Usage
 	switch u := usageAny.(type) {
 	case *dto.Usage:
-		return u, nil
+		usage = u
 	case dto.Usage:
-		return &u, nil
+		usage = &u
 	case nil:
 		if !isStream {
 			return nil, errors.New("usage is nil")
 		}
-		usage := &dto.Usage{
+		usage = &dto.Usage{
 			PromptTokens: estimatePromptTokens,
 		}
 		usage.TotalTokens = usage.PromptTokens
-		return usage, nil
 	default:
 		if !isStream {
 			return nil, fmt.Errorf("invalid usage type: %T", usageAny)
 		}
-		usage := &dto.Usage{
+		usage = &dto.Usage{
 			PromptTokens: estimatePromptTokens,
 		}
 		usage.TotalTokens = usage.PromptTokens
-		return usage, nil
 	}
+	if usage == nil {
+		return nil, errors.New("usage is nil")
+	}
+	if err := validateTestUsage(usage); err != nil {
+		return nil, err
+	}
+	return usage, nil
+}
+
+func validateTestUsage(usage *dto.Usage) error {
+	values := map[string]int{
+		"prompt_tokens":                   usage.PromptTokens,
+		"completion_tokens":               usage.CompletionTokens,
+		"total_tokens":                    usage.TotalTokens,
+		"prompt_cache_hit_tokens":         usage.PromptCacheHitTokens,
+		"input_tokens":                    usage.InputTokens,
+		"output_tokens":                   usage.OutputTokens,
+		"claude_cache_creation_5m_tokens": usage.ClaudeCacheCreation5mTokens,
+		"claude_cache_creation_1h_tokens": usage.ClaudeCacheCreation1hTokens,
+		"cached_tokens":                   usage.PromptTokensDetails.CachedTokens,
+		"cached_creation_tokens":          usage.PromptTokensDetails.CachedCreationTokens,
+		"cache_write_tokens":              usage.PromptTokensDetails.CacheWriteTokens,
+		"text_tokens":                     usage.PromptTokensDetails.TextTokens,
+		"audio_tokens":                    usage.PromptTokensDetails.AudioTokens,
+		"image_tokens":                    usage.PromptTokensDetails.ImageTokens,
+		"completion_text_tokens":          usage.CompletionTokenDetails.TextTokens,
+		"completion_audio_tokens":         usage.CompletionTokenDetails.AudioTokens,
+		"completion_image_tokens":         usage.CompletionTokenDetails.ImageTokens,
+		"reasoning_tokens":                usage.CompletionTokenDetails.ReasoningTokens,
+	}
+	if detail := usage.InputTokensDetails; detail != nil {
+		values["input_cached_tokens"] = detail.CachedTokens
+		values["input_cached_creation_tokens"] = detail.CachedCreationTokens
+		values["input_cache_write_tokens"] = detail.CacheWriteTokens
+		values["input_text_tokens"] = detail.TextTokens
+		values["input_audio_tokens"] = detail.AudioTokens
+		values["input_image_tokens"] = detail.ImageTokens
+	}
+	for name, value := range values {
+		if value < 0 || value > common.MaxQuota {
+			return fmt.Errorf("%s must be between 0 and %d: %d", name, common.MaxQuota, value)
+		}
+	}
+	return nil
 }
 
 func readTestResponseBody(body io.ReadCloser, isStream bool) ([]byte, error) {

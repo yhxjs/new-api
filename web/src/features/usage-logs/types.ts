@@ -139,7 +139,7 @@ export interface LogOtherData {
     quota_saturation?: {
       op: string
       kind: 'overflow' | 'underflow' | 'nan'
-      original: number
+      original: number | string
       clamped: number
     }
     task_plugin?: TaskPluginInfo

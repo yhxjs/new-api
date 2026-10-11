@@ -24,6 +24,23 @@ import {
 } from '../nav-modules'
 
 describe('header navigation module parsing', () => {
+  test.each([true, 1, 'true', { enabled: true, requireAuth: false }])(
+    'enables degradation check and requires authentication for %j',
+    (degradationCheck) => {
+      expect(
+        parseHeaderNavModules(JSON.stringify({ degradationCheck }))
+          .degradationCheck
+      ).toEqual({ enabled: true, requireAuth: true })
+    }
+  )
+
+  test('keeps degradation check disabled when configuration is absent', () => {
+    expect(parseHeaderNavModules('').degradationCheck).toEqual({
+      enabled: false,
+      requireAuth: true,
+    })
+  })
+
   test('keeps model status disabled and authenticated for missing and legacy settings', () => {
     expect(parseHeaderNavModules('').modelStatus).toEqual({
       enabled: false,

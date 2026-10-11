@@ -31,6 +31,7 @@ export type HeaderNavModulesConfig = {
   pricing: HeaderNavAccessConfig
   rankings: HeaderNavRankingsAccessConfig
   modelStatus: HeaderNavAccessConfig
+  degradationCheck: HeaderNavAccessConfig
   docs: boolean
   about: boolean
   [key: string]: boolean | HeaderNavAccessConfig | HeaderNavRankingsAccessConfig
@@ -56,6 +57,10 @@ export const HEADER_NAV_DEFAULT: HeaderNavModulesConfig = {
     userLeaderboardEnabled: false,
   },
   modelStatus: {
+    enabled: false,
+    requireAuth: true,
+  },
+  degradationCheck: {
     enabled: false,
     requireAuth: true,
   },
@@ -109,6 +114,7 @@ const cloneHeaderNavDefault = (): HeaderNavModulesConfig => ({
   pricing: { ...HEADER_NAV_DEFAULT.pricing },
   rankings: { ...HEADER_NAV_DEFAULT.rankings },
   modelStatus: { ...HEADER_NAV_DEFAULT.modelStatus },
+  degradationCheck: { ...HEADER_NAV_DEFAULT.degradationCheck },
 })
 
 const parseAccessModule = (
@@ -177,6 +183,7 @@ export function parseHeaderNavModules(
       pricing: { ...base.pricing },
       rankings: { ...base.rankings },
       modelStatus: { ...base.modelStatus },
+      degradationCheck: { ...base.degradationCheck },
     }
 
     Object.entries(parsed).forEach(([key, raw]) => {
@@ -191,6 +198,13 @@ export function parseHeaderNavModules(
       if (key === 'modelStatus') {
         result.modelStatus = {
           ...parseAccessModule(raw, base.modelStatus),
+          requireAuth: true,
+        }
+        return
+      }
+      if (key === 'degradationCheck') {
+        result.degradationCheck = {
+          ...parseAccessModule(raw, base.degradationCheck),
           requireAuth: true,
         }
         return

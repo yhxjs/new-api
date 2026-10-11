@@ -171,6 +171,28 @@ func TestOaiResponsesToChatBufferedStreamHandlerReturnsJSONFromSSE(t *testing.T)
 	require.Contains(t, got, `"finish_reason":"tool_calls"`)
 }
 
+func TestOaiResponsesToChatBufferedStreamHandlerKeepsRelayFallbackWithoutTerminalResponse(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		suffix string
+	}{
+		{name: "EOF"},
+		{name: "DONE sentinel", suffix: "data: [DONE]\n\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := "data: {\"type\":\"response.output_text.delta\",\"delta\":\"buffered text\"}\n\n" + tc.suffix
+			c, recorder, resp, info := newResponsesChatTestContext(t, body, false)
+
+			usage, err := OaiResponsesToChatBufferedStreamHandler(c, info, resp)
+
+			require.Nil(t, err)
+			require.NotNil(t, usage)
+			assert.Contains(t, recorder.Body.String(), `"content":"buffered text"`)
+			assert.Contains(t, recorder.Body.String(), `"finish_reason":"stop"`)
+		})
+	}
+}
+
 func TestOaiChatToResponsesStreamHandlerConvertsSSEOrderAndUsage(t *testing.T) {
 	oldMode := gin.Mode()
 	gin.SetMode(gin.TestMode)
@@ -231,5 +253,59 @@ func requireOrderedSubstrings(t *testing.T, s string, parts ...string) {
 		idx := strings.Index(s[offset:], part)
 		require.NotEqualf(t, -1, idx, "missing %q after byte offset %d", part, offset)
 		offset += idx + len(part)
+	}
+}
+
+func TestOaiResponsesToChatHandlerRejectsFailedResponses(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		body       string
+		statusCode int
+		message    string
+		code       any
+		param      string
+	}{
+		{name: "error without type", body: `{"error":{"code":"server_error","message":"generation failed","param":"model"}}`, statusCode: http.StatusInternalServerError, message: "generation failed", code: "server_error", param: "model"},
+		{name: "failed with matching text", body: `{"status":"failed","error":{"code":"server_error","message":"generation failed"},"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`, statusCode: http.StatusInternalServerError, message: "generation failed", code: "server_error"},
+		{name: "failed without error", body: `{"status":"failed","error":null}`, statusCode: http.StatusInternalServerError, message: "responses request failed", code: types.ErrorCodeBadResponse},
+		{name: "typed error preserves HTTP status", body: `{"error":{"type":"rate_limit_error","code":"rate_limit_exceeded","message":"try later"}}`, statusCode: http.StatusTooManyRequests, message: "try later", code: "rate_limit_exceeded"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, recorder, resp, info := newResponsesChatTestContext(t, tc.body, false)
+			resp.Header.Set("Content-Type", "application/json")
+			if tc.statusCode == http.StatusTooManyRequests {
+				resp.StatusCode = tc.statusCode
+			}
+
+			usage, apiErr := OaiResponsesToChatHandler(c, info, resp)
+
+			require.NotNil(t, apiErr)
+			assert.Nil(t, usage)
+			assert.Equal(t, tc.statusCode, apiErr.StatusCode)
+			oaiErr := apiErr.ToOpenAIError()
+			assert.Equal(t, tc.message, oaiErr.Message)
+			assert.Equal(t, tc.code, oaiErr.Code)
+			assert.Equal(t, tc.param, oaiErr.Param)
+			assert.NotEmpty(t, oaiErr.Type)
+			assert.Empty(t, recorder.Body.String())
+		})
+	}
+}
+
+func TestOaiResponsesToChatHandlerAllowsSuccessfulAndIncompleteResponses(t *testing.T) {
+	for _, status := range []string{"completed", "incomplete"} {
+		t.Run(status, func(t *testing.T) {
+			body := `{"status":"` + status + `","error":null,"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11}}`
+			c, recorder, resp, info := newResponsesChatTestContext(t, body, false)
+			resp.Header.Set("Content-Type", "application/json")
+
+			usage, apiErr := OaiResponsesToChatHandler(c, info, resp)
+
+			require.Nil(t, apiErr)
+			require.NotNil(t, usage)
+			assert.Equal(t, 11, usage.TotalTokens)
+			assert.Equal(t, http.StatusOK, recorder.Code)
+			assert.Contains(t, recorder.Body.String(), `"content":"ok"`)
+		})
 	}
 }

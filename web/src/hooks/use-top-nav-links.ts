@@ -91,6 +91,10 @@ export function useTopNavLinks(): TopNavLink[] {
     links.push({ title: t('Model Status'), href: '/model-status' })
   }
 
+  if (modules.degradationCheck?.enabled && isAuthed) {
+    links.push({ title: t('Degradation Check'), href: '/degradation-check' })
+  }
+
   // Docs (supports external links)
   if (modules?.docs !== false) {
     if (docsLink) {

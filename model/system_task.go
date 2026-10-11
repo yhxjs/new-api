@@ -16,11 +16,12 @@ const (
 	SystemTaskStatusSucceeded SystemTaskStatus = "succeeded"
 	SystemTaskStatusFailed    SystemTaskStatus = "failed"
 
-	SystemTaskTypeLogCleanup     = "log_cleanup"
-	SystemTaskTypeChannelTest    = "channel_test"
-	SystemTaskTypeModelUpdate    = "model_update"
-	SystemTaskTypeMidjourneyPoll = "midjourney_poll"
-	SystemTaskTypeAsyncTaskPoll  = "async_task_poll"
+	SystemTaskTypeLogCleanup       = "log_cleanup"
+	SystemTaskTypeChannelTest      = "channel_test"
+	SystemTaskTypeModelUpdate      = "model_update"
+	SystemTaskTypeMidjourneyPoll   = "midjourney_poll"
+	SystemTaskTypeAsyncTaskPoll    = "async_task_poll"
+	SystemTaskTypeDegradationCheck = "degradation_check"
 )
 
 var ErrSystemTaskLockLost = errors.New("system task lock lost")
@@ -220,6 +221,42 @@ func GetLatestSystemTasks(taskTypes []string) (map[string]*SystemTask, error) {
 		tasksByType[task.Type] = task
 	}
 	return tasksByType, nil
+}
+
+// GetLatestScheduledSystemTasks returns the latest row that represents a
+// scheduler-created run for each type. Manual runs may use a non-empty
+// payload, while scheduled runs use the empty payload produced by a nil
+// payload value. An active manual row still blocks scheduling so two runs of
+// the same type cannot overlap.
+func GetLatestScheduledSystemTasks(taskTypes []string) (map[string]*SystemTask, error) {
+	latestTasks, err := GetLatestSystemTasks(taskTypes)
+	if err != nil || len(latestTasks) == 0 {
+		return latestTasks, err
+	}
+
+	scheduledSubQuery := DB.Model(&SystemTask{}).
+		Select("MAX(id)").
+		Where("type IN ? AND (payload = ? OR payload IS NULL)", taskTypes, "").
+		Group("type")
+	var scheduledTasks []*SystemTask
+	if err := DB.Where("id IN (?)", scheduledSubQuery).Find(&scheduledTasks).Error; err != nil {
+		return nil, err
+	}
+	scheduledByType := make(map[string]*SystemTask, len(scheduledTasks))
+	for _, task := range scheduledTasks {
+		scheduledByType[task.Type] = task
+		latest := latestTasks[task.Type]
+		if latest == nil || latest.Status == SystemTaskStatusPending || latest.Status == SystemTaskStatusRunning {
+			continue
+		}
+		latestTasks[task.Type] = task
+	}
+	for taskType, latest := range latestTasks {
+		if latest.Status != SystemTaskStatusPending && latest.Status != SystemTaskStatusRunning && latest.Payload != "" && scheduledByType[taskType] == nil {
+			delete(latestTasks, taskType)
+		}
+	}
+	return latestTasks, nil
 }
 
 func ClaimSystemTask(id int64, taskType string, runnerID string, lockUntil int64) (*SystemTask, bool, error) {

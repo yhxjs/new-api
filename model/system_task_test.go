@@ -257,6 +257,56 @@ func TestGetLatestSystemTasks(t *testing.T) {
 	assert.Nil(t, tasks["missing"])
 }
 
+func TestGetLatestScheduledSystemTasksIgnoresFinishedManualRuns(t *testing.T) {
+	truncateTables(t)
+
+	manual, err := CreateSystemTask(SystemTaskTypeDegradationCheck, map[string]any{
+		"channel_id": 7,
+		"model_name": "target-model",
+	}, nil)
+	require.NoError(t, err)
+	runnerID := "runner-manual"
+	_, claimed, err := ClaimSystemTask(manual.ID, manual.Type, runnerID, common.GetTimestamp()+60)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	require.NoError(t, FinishSystemTask(manual.TaskID, runnerID, SystemTaskStatusSucceeded, nil, ""))
+
+	latest, err := GetLatestScheduledSystemTasks([]string{SystemTaskTypeDegradationCheck})
+	require.NoError(t, err)
+	assert.Nil(t, latest[SystemTaskTypeDegradationCheck], "a finished manual run must not delay the first scheduled round")
+
+	scheduled, err := CreateSystemTask(SystemTaskTypeDegradationCheck, nil, nil)
+	require.NoError(t, err)
+	_, claimed, err = ClaimSystemTask(scheduled.ID, scheduled.Type, runnerID, common.GetTimestamp()+60)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	require.NoError(t, FinishSystemTask(scheduled.TaskID, runnerID, SystemTaskStatusSucceeded, nil, ""))
+	manualAfterScheduled, err := CreateSystemTask(SystemTaskTypeDegradationCheck, map[string]any{
+		"channel_id": 8,
+		"model_name": "another-model",
+	}, nil)
+	require.NoError(t, err)
+	_, claimed, err = ClaimSystemTask(manualAfterScheduled.ID, manualAfterScheduled.Type, runnerID, common.GetTimestamp()+60)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	require.NoError(t, FinishSystemTask(manualAfterScheduled.TaskID, runnerID, SystemTaskStatusSucceeded, nil, ""))
+
+	latest, err = GetLatestScheduledSystemTasks([]string{SystemTaskTypeDegradationCheck})
+	require.NoError(t, err)
+	require.NotNil(t, latest[SystemTaskTypeDegradationCheck])
+	assert.Equal(t, scheduled.TaskID, latest[SystemTaskTypeDegradationCheck].TaskID)
+
+	activeManual, err := CreateSystemTask(SystemTaskTypeDegradationCheck, map[string]any{
+		"channel_id": 9,
+		"model_name": "active-model",
+	}, nil)
+	require.NoError(t, err)
+	latest, err = GetLatestScheduledSystemTasks([]string{SystemTaskTypeDegradationCheck})
+	require.NoError(t, err)
+	assert.Equal(t, activeManual.TaskID, latest[SystemTaskTypeDegradationCheck].TaskID, "a pending manual task must remain visible to the active-task check")
+	assert.Equal(t, SystemTaskStatusPending, activeManual.Status)
+}
+
 func TestRenewSystemTaskLock(t *testing.T) {
 	truncateTables(t)
 

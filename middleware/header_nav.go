@@ -20,7 +20,7 @@ func getHeaderNavAccess(module string) headerNavAccess {
 		Enabled:     true,
 		RequireAuth: false,
 	}
-	if module == "modelStatus" {
+	if module == "modelStatus" || module == "degradationCheck" {
 		fallback = headerNavAccess{
 			Enabled:     false,
 			RequireAuth: true,
@@ -166,6 +166,24 @@ func HeaderNavModelStatusAuth() gin.HandlerFunc {
 		}
 
 		UserAuth()(c)
+	}
+}
+
+// HeaderNavDegradationCheckAuth checks module visibility after UserAuth.
+func HeaderNavDegradationCheckAuth() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		access := getHeaderNavAccess("degradationCheck")
+		// Admins bypass the nav toggle: the probe settings and manual runs stay
+		// reachable even while the module is hidden from regular users.
+		if !access.Enabled && c.GetInt("role") < common.RoleAdminUser {
+			c.JSON(http.StatusForbidden, gin.H{
+				"success": false,
+				"message": "degradation check is disabled",
+			})
+			c.Abort()
+			return
+		}
+		c.Next()
 	}
 }
 

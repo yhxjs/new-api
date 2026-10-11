@@ -14,6 +14,31 @@ import (
 // below reproduces that oversized product for the saturation checks.
 const overflowingProduct = 2000 * 1.8446744073686647e19
 
+func TestQuotaClampAuditMapPreservesJSONDiagnostics(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		original float64
+		want     any
+	}{
+		{"finite overflow", overflowingProduct, overflowingProduct},
+		{"positive infinity", math.Inf(1), "+Inf"},
+		{"negative infinity", math.Inf(-1), "-Inf"},
+		{"not a number", math.NaN(), "NaN"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			quota, clamp := QuotaFromFloatChecked(tc.original)
+			require.NotNil(t, clamp)
+			data, err := Marshal(clamp.AuditMap())
+			require.NoError(t, err, "a saturated charge must not discard its log payload")
+			var stored map[string]any
+			require.NoError(t, Unmarshal(data, &stored))
+			assert.Equal(t, tc.want, stored["original"])
+			assert.Equal(t, float64(quota), stored["clamped"])
+			assert.Equal(t, string(clamp.Kind), stored["kind"])
+		})
+	}
+}
+
 // TestQuotaFromFloat guards the billing invariant that oversized quota
 // products (e.g. price multiplied by a huge user-supplied count) saturate
 // instead of wrapping into a negative charge (credit). QuotaFromFloat

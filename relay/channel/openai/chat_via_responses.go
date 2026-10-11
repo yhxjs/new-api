@@ -37,8 +37,16 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 
-	if oaiError := responsesResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
-		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
+	if oaiError := responsesResp.GetOpenAIError(); oaiError != nil {
+		statusCode := resp.StatusCode
+		if statusCode < http.StatusBadRequest {
+			statusCode = http.StatusInternalServerError
+		}
+		return nil, types.WithOpenAIError(*oaiError, statusCode)
+	}
+	var status string
+	if common.Unmarshal(responsesResp.Status, &status) == nil && status == "failed" {
+		return nil, types.NewOpenAIError(fmt.Errorf("responses request failed"), types.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 
 	chatResult, err := relayconvert.ConvertResponse(c, info, types.RelayFormatOpenAI, &responsesResp)
@@ -111,6 +119,13 @@ func OaiResponsesToChatBufferedStreamHandler(c *gin.Context, info *relaycommon.R
 		}
 		accumulator.ProcessEvent(&streamResp)
 		switch streamResp.Type {
+		case "error":
+			var oaiErr types.OpenAIError
+			if err := common.UnmarshalJsonStr(data, &oaiErr); err != nil {
+				streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+			} else {
+				streamErr = types.WithOpenAIError(oaiErr, http.StatusInternalServerError)
+			}
 		case "response.completed", "response.done", "response.incomplete":
 			finalResponse = streamResp.Response
 			if streamResp.Type == "response.incomplete" {
@@ -141,6 +156,9 @@ func OaiResponsesToChatBufferedStreamHandler(c *gin.Context, info *relaycommon.R
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	if finalResponse == nil {
+		if info.IsChannelTest {
+			return nil, types.NewOpenAIError(fmt.Errorf("responses stream ended without a terminal response"), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		}
 		finalResponse = &dto.OpenAIResponsesResponse{
 			ID:        helper.GetResponseID(c),
 			CreatedAt: int(time.Now().Unix()),

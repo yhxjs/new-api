@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -247,6 +248,41 @@ func TestSettleTestQuotaUsesTieredBilling(t *testing.T) {
 	require.Equal(t, 1500, quota)
 	require.NotNil(t, result)
 	require.Equal(t, "stream", result.MatchedTier)
+}
+
+func TestSettleTestQuotaRecordsSaturation(t *testing.T) {
+	info := &relaycommon.RelayInfo{}
+	quota, result := settleTestQuota(info, types.PriceData{
+		ModelRatio:      1,
+		CompletionRatio: math.Inf(1),
+	}, &dto.Usage{CompletionTokens: 1})
+
+	assert.Nil(t, result)
+	assert.Equal(t, common.MaxQuota, quota)
+	require.NotNil(t, info.QuotaClamp)
+	assert.Equal(t, common.QuotaClampOverflow, info.QuotaClamp.Kind)
+}
+
+func TestBuildTestLogOtherAuditsSaturatedQuota(t *testing.T) {
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+	priceData := types.PriceData{ModelRatio: 1, CompletionRatio: float64(common.MaxQuota) * 2}
+	usage := &dto.Usage{CompletionTokens: 1}
+	quota, result := settleTestQuota(info, priceData, usage)
+	require.NotNil(t, info.QuotaClamp)
+
+	other := buildTestLogOther(ctx, info, priceData, usage, result)
+	// The complete consume-log payload must remain JSON-serializable.
+	data, err := common.Marshal(other)
+	require.NoError(t, err)
+	var stored struct {
+		AdminInfo struct {
+			QuotaSaturation common.QuotaClamp `json:"quota_saturation"`
+		} `json:"admin_info"`
+	}
+	require.NoError(t, common.Unmarshal(data, &stored))
+	assert.Equal(t, common.MaxQuota, quota)
+	assert.Equal(t, *info.QuotaClamp, stored.AdminInfo.QuotaSaturation)
 }
 
 func TestBuildTestLogOtherInjectsTieredInfo(t *testing.T) {
